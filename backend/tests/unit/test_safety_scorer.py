@@ -14,6 +14,7 @@ def test_clean_route_scores_high() -> None:
         "report_penalty",
         "coverage_bonus",
         "length_penalty",
+        "nearby_report_count",
     }
 
 

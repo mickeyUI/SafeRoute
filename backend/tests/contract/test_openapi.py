@@ -14,6 +14,8 @@ EXPECTED_PATHS = {
     "/api/v1/journeys",
     "/api/v1/journeys/active",
     "/api/v1/contacts",
+    "/api/v1/sos",
+    "/api/v1/sos/mine",
     "/api/v1/health/ready",
 }
 

@@ -85,5 +85,6 @@ def score_route(
             "report_penalty": round(report_penalty, 2),
             "coverage_bonus": round(coverage_bonus, 2),
             "length_penalty": round(length_penalty, 2),
+            "nearby_report_count": float(reports_nearby),
         },
     )
