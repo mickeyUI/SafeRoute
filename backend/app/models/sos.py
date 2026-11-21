@@ -21,9 +21,7 @@ class SosStatus(str, enum.Enum):
 
 class SosAlert(TimestampMixin, Base):
     __tablename__ = "sos_alerts"
-    __table_args__ = (
-        Index("ix_sos_alerts_location_gist", "location", postgresql_using="gist"),
-    )
+    __table_args__ = (Index("ix_sos_alerts_location_gist", "location", postgresql_using="gist"),)
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     reporter_id: Mapped[UUID] = mapped_column(
@@ -43,6 +41,4 @@ class SosAlert(TimestampMixin, Base):
     responded_by: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    responded_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

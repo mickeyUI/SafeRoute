@@ -25,9 +25,7 @@ def moderate_report(
     status: ReportStatus,
     rejection_reason: str | None = None,
 ) -> Report:
-    report = report_service.moderate_report(
-        db, report_id, reviewer, status, rejection_reason
-    )
+    report = report_service.moderate_report(db, report_id, reviewer, status, rejection_reason)
     logger.info(
         "report_moderated",
         extra={

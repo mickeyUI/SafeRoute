@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import uuid4
-from fastapi import FastAPI, Request
+
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.api.v1.api_router import api_router
 from app.core.config import settings
 from app.core.errors import AppError
 from app.core.logging import configure_logging
-from app.api.v1.api_router import api_router
 
 
 def _error_response(
@@ -40,7 +43,10 @@ def create_app() -> FastAPI:
     application = FastAPI(
         title=settings.PROJECT_NAME,
         version=settings.version,
-        description="SafeRoute API: Community-powered safety navigation and pedestrian travel decision support.",
+        description=(
+            "SafeRoute API: Community-powered safety navigation and "
+            "pedestrian travel decision support."
+        ),
         docs_url="/docs",
         redoc_url="/redoc" if settings.debug else None,
     )
@@ -66,9 +72,29 @@ def create_app() -> FastAPI:
     async def handle_app_error(request: Request, exc: AppError) -> JSONResponse:
         return _error_response(request, exc.status_code, exc.code, exc.message, exc.details)
 
+    @application.exception_handler(HTTPException)
+    async def handle_http_error(request: Request, exc: HTTPException) -> JSONResponse:
+        codes = {
+            400: "bad_request",
+            401: "authentication_error",
+            403: "forbidden_error",
+            404: "not_found",
+            409: "conflict_error",
+        }
+        return _error_response(
+            request,
+            exc.status_code,
+            codes.get(exc.status_code, "http_error"),
+            str(exc.detail),
+        )
+
     @application.exception_handler(RequestValidationError)
-    async def handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
-        return _error_response(request, 422, "validation_error", "Request validation failed", exc.errors())
+    async def handle_validation_error(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        return _error_response(
+            request, 422, "validation_error", "Request validation failed", exc.errors()
+        )
 
     @application.exception_handler(SQLAlchemyError)
     async def handle_database_error(request: Request, exc: SQLAlchemyError) -> JSONResponse:
@@ -83,7 +109,7 @@ def create_app() -> FastAPI:
             "version": settings.version,
             "routing_provider": settings.routing_provider,
             "docs_url": "/docs",
-            "description": "SafeRoute pedestrian safety scoring and navigation platform."
+            "description": "SafeRoute pedestrian safety scoring and navigation platform.",
         }
 
     @application.get("/health", tags=["Health"])
@@ -91,11 +117,20 @@ def create_app() -> FastAPI:
         return {
             "status": "ok",
             "version": settings.version,
-            "routing_provider": settings.routing_provider
+            "routing_provider": settings.routing_provider,
         }
 
     # Mount API v1 router
     application.include_router(api_router, prefix=settings.API_V1_STR)
+
+    # Static visual map demo, served from the same origin as the API.
+    demo_dir = Path(__file__).resolve().parents[2] / "demo" / "map"
+    if demo_dir.is_dir():
+        application.mount(
+            "/demo/map",
+            StaticFiles(directory=demo_dir, html=True),
+            name="demo-map",
+        )
 
     return application
 

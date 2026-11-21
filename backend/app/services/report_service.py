@@ -19,6 +19,8 @@ from app.services.safety.scorer import ReportSample
 
 
 def create_report(db: Session, reporter_id: UUID, payload: ReportCreate) -> Report:
+    if payload.location is None:
+        raise ValueError("A report location is required")
     report = Report(
         reporter_id=reporter_id,
         type=payload.type,

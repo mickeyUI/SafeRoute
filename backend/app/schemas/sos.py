@@ -22,7 +22,7 @@ class SosRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    reporter_id: UUID
+    reporter_id: str
     location: Point
     reason: str | None
     voice_attached: bool

@@ -1,9 +1,11 @@
-from functools import lru_cache
 import re
-from typing import List, Literal
+from functools import lru_cache
+from typing import Literal
 from urllib.parse import quote_plus
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -39,13 +41,15 @@ class Settings(BaseSettings):
     db_echo: bool = False
 
     # CORS & Rate Limiting
-    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://localhost:8081,*"
+    cors_origins: str = (
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://localhost:8081,*"
+    )
     rate_limit_per_minute: int = 30
-    BACKEND_CORS_ORIGINS: List[str] = [
+    BACKEND_CORS_ORIGINS: list[str] = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:3000",
-        "*"
+        "*",
     ]
 
     # Routing Configuration (Strategy Pattern: "osrm", "graphhopper", "stub")
@@ -73,10 +77,12 @@ class Settings(BaseSettings):
         if not v or not isinstance(v, str):
             return v
         if v.startswith("postgresql://"):
-            v = "postgresql+psycopg://" + v[len("postgresql://"):]
+            v = "postgresql+psycopg://" + v[len("postgresql://") :]
         elif v.startswith("postgres://"):
-            v = "postgresql+psycopg://" + v[len("postgres://"):]
-        m = re.match(r"^(?P<scheme>[^:]+://)(?P<user>[^:]+):(?P<password>.+?)@(?P<host>[^/]+)/(?P<db>.*)$", v)
+            v = "postgresql+psycopg://" + v[len("postgres://") :]
+        m = re.match(
+            r"^(?P<scheme>[^:]+://)(?P<user>[^:]+):(?P<password>.+?)@(?P<host>[^/]+)/(?P<db>.*)$", v
+        )
         if m:
             scheme = m.group("scheme")
             user = m.group("user")
@@ -99,8 +105,10 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
+
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
 
 settings = get_settings()

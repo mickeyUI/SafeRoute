@@ -29,17 +29,13 @@ class ReportStatus(str, enum.Enum):
 
 class Report(TimestampMixin, Base):
     __tablename__ = "reports"
-    __table_args__ = (
-        CheckConstraint("severity BETWEEN 1 AND 5", name="reports_severity_range"),
-    )
+    __table_args__ = (CheckConstraint("severity BETWEEN 1 AND 5", name="reports_severity_range"),)
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     reporter_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
     )
-    type: Mapped[ReportType] = mapped_column(
-        Enum(ReportType, name="report_type"), nullable=False
-    )
+    type: Mapped[ReportType] = mapped_column(Enum(ReportType, name="report_type"), nullable=False)
     severity: Mapped[int] = mapped_column(Integer, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     location: Mapped[object] = mapped_column(
@@ -52,7 +48,5 @@ class Report(TimestampMixin, Base):
     reviewed_by: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    reviewed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)

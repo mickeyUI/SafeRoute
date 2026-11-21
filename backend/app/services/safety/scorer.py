@@ -51,21 +51,13 @@ def score_route(
             for segment in segments
         ):
             reports_nearby += 1
-            weighted_reports += (
-                report.severity * weights.type_multipliers.get(report.type, 1.0)
-            )
+            weighted_reports += report.severity * weights.type_multipliers.get(report.type, 1.0)
 
-    coverage_ratio = safe_location_coverage(
-        segments, safe_locations, safe_location_radius_m
-    )
+    coverage_ratio = safe_location_coverage(segments, safe_locations, safe_location_radius_m)
 
-    report_penalty = min(
-        weights.max_report_penalty, weights.report_weight * weighted_reports
-    )
+    report_penalty = min(weights.max_report_penalty, weights.report_weight * weighted_reports)
     coverage_bonus = weights.coverage_weight * coverage_ratio
-    length_penalty = min(
-        weights.max_length_penalty, length_km * weights.length_penalty_per_km
-    )
+    length_penalty = min(weights.max_length_penalty, length_km * weights.length_penalty_per_km)
 
     score = _clamp(
         weights.base_score - report_penalty + coverage_bonus - length_penalty,
