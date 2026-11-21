@@ -1,12 +1,13 @@
 import uuid
 import math
 import hashlib
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from app.schemas.report import ReportCategory, ModerationStatus, ReportCreate
 from app.schemas.safe_location import SafeLocationCategory
 from app.schemas.journey import JourneyStatus
 from app.schemas.contact import ContactCreate
+from app.schemas.sos import SosAlertCreate
 
 class DataStore:
     """
@@ -21,6 +22,7 @@ class DataStore:
         self.shares: Dict[str, Dict[str, Any]] = {}
         self.contacts: Dict[str, Dict[str, Any]] = {}
         self.users: Dict[str, Dict[str, Any]] = {}
+        self.sos_alerts: Dict[str, Dict[str, Any]] = {}
         self.seed_initial_data()
 
     @staticmethod
@@ -396,6 +398,78 @@ class DataStore:
                     session.commit()
         except Exception:
             pass
+        return True
+
+    # --- SOS Alert Methods ---
+    def create_sos_alert(
+        self,
+        alert_in: SosAlertCreate,
+        user_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Store an active SOS broadcast so nearby SafeRoute clients can find it."""
+        now = datetime.now(UTC)
+        alert_id = f"sos_{uuid.uuid4().hex[:12]}"
+        alert = {
+            "id": alert_id,
+            "user_id": user_id,
+            "client_id": alert_in.client_id,
+            "latitude": alert_in.latitude,
+            "longitude": alert_in.longitude,
+            "radius_meters": alert_in.radius_meters,
+            "reason": alert_in.reason,
+            "status": "active",
+            "share_token": alert_in.share_token,
+            "share_url": alert_in.share_url,
+            "journey_id": alert_in.journey_id,
+            "created_at": now,
+            "expires_at": now + timedelta(hours=alert_in.valid_hours),
+            "resolved_at": None,
+        }
+        self.sos_alerts[alert_id] = alert
+        return alert
+
+    def get_active_sos_alerts_nearby(
+        self,
+        lat: float,
+        lon: float,
+        radius_meters: float = 25000.0,
+    ) -> list[dict[str, Any]]:
+        """Return live alerts whose broadcast area reaches the queried point."""
+        now = datetime.now(UTC)
+        results: list[dict[str, Any]] = []
+        for alert in self.sos_alerts.values():
+            if alert["status"] != "active" or alert["expires_at"] <= now:
+                continue
+            distance = self.haversine_distance(
+                lat, lon, alert["latitude"], alert["longitude"]
+            )
+            # An alert is visible inside its own radius, and only to clients
+            # searching within the requested radius.
+            if distance <= min(alert["radius_meters"], radius_meters):
+                copy_alert = dict(alert)
+                copy_alert["distance_meters"] = distance
+                results.append(copy_alert)
+        results.sort(key=lambda item: item["distance_meters"])
+        return results
+
+    def resolve_sos_alert(
+        self,
+        alert_id: str,
+        client_id: str | None = None,
+        user_id: str | None = None,
+    ) -> bool:
+        """Let the originating device mark its own alert as resolved."""
+        alert = self.sos_alerts.get(alert_id)
+        if not alert or alert["status"] != "active":
+            return False
+        is_owner = (
+            bool(client_id and alert.get("client_id") == client_id)
+            or bool(user_id and alert.get("user_id") == user_id)
+        )
+        if not is_owner:
+            return False
+        alert["status"] = "resolved"
+        alert["resolved_at"] = datetime.now(UTC)
         return True
 
     # --- Incident Report Methods ---

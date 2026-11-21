@@ -42,10 +42,23 @@ export interface SosRequest {
   reason?: string;
   voiceAttached: boolean;
   pictureName?: string;
-  status: 'Saved locally — demo only' | 'Sent to backend' | 'Emergency Active';
+  status: 'Saved locally — demo only' | 'Sent to backend' | 'Emergency Active' | 'Resolved';
   journeyId?: string;
   shareToken?: string;
   shareUrl?: string;
+  alertId?: string;
+}
+
+export interface NearbySosAlert {
+  alertId: string;
+  clientId?: string;
+  position: LatLng;
+  reason?: string;
+  distanceMeters: number;
+  shareToken?: string;
+  shareUrl?: string;
+  createdAt: string;
+  expiresAt: string;
 }
 
 export interface PlaceResult {

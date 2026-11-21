@@ -5,6 +5,7 @@ import type {
   ReportCategory,
   SafeLocation,
   BackendSafetyIndicator,
+  NearbySosAlert,
 } from './types';
 import { getToken } from './auth';
 
@@ -12,6 +13,22 @@ const DEFAULT_API_BASE_URL = 'https://saferoute-ezbz.onrender.com/api/v1';
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE_URL;
 const PHOTON_ENDPOINT = import.meta.env.VITE_GEOCODING_ENDPOINT || 'https://photon.komoot.io/api/';
 const OSRM_ENDPOINT = import.meta.env.VITE_ROUTING_ENDPOINT || 'https://router.project-osrm.org/route/v1/driving';
+const CLIENT_ID_KEY = 'saferoute-client-id';
+
+/** Stable per-device id so a user's own SOS alerts are not shown as someone else's. */
+export function getClientId(): string {
+  try {
+    const existing = localStorage.getItem(CLIENT_ID_KEY);
+    if (existing) return existing;
+    const created = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `device-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem(CLIENT_ID_KEY, created);
+    return created;
+  } catch {
+    return `device-${Date.now()}`;
+  }
+}
 
 let lastGeocodeAt = 0;
 let lastRouteAt = 0;
@@ -240,14 +257,31 @@ export async function fetchBackendContacts(): Promise<Array<{ id: string; name: 
   });
 }
 
+export interface SosTriggerOptions {
+  radiusMeters?: number;
+  clientId?: string;
+}
+
+export interface SosTriggerResult {
+  reportId?: string;
+  journeyId?: string;
+  shareToken?: string;
+  shareUrl?: string;
+  alertId?: string;
+  radiusMeters: number;
+}
+
 export async function triggerBackendSos(
   position: LatLng,
   reason?: string,
-): Promise<{ reportId?: string; journeyId?: string; shareToken?: string; shareUrl?: string }> {
+  options: SosTriggerOptions = {},
+): Promise<SosTriggerResult> {
+  const radiusMeters = options.radiusMeters ?? 2000;
   let reportId: string | undefined;
   let journeyId: string | undefined;
   let shareToken: string | undefined;
   let shareUrl: string | undefined;
+  let alertId: string | undefined;
 
   try {
     const rep = await submitBackendReport({
@@ -273,9 +307,7 @@ export async function triggerBackendSos(
     journeyId = journey.journey_id;
 
     if (journeyId) {
-      const share = await apiRequest<{ share_token: string }>([
-        `/journeys/${journeyId}/share`,
-      ].join(''), {
+      const share = await apiRequest<{ share_token: string }>(`/journeys/${journeyId}/share`, {
         method: 'POST',
         body: JSON.stringify({ valid_hours: 3 }),
       });
@@ -286,7 +318,82 @@ export async function triggerBackendSos(
     // Journey optional
   }
 
-  return { reportId, journeyId, shareToken, shareUrl };
+  try {
+    const alert = await apiRequest<{ alert_id: string }>('/sos/alerts', {
+      method: 'POST',
+      body: JSON.stringify({
+        latitude: position[0],
+        longitude: position[1],
+        radius_meters: radiusMeters,
+        reason: reason || null,
+        client_id: options.clientId || null,
+        share_token: shareToken || null,
+        share_url: shareUrl || null,
+        journey_id: journeyId || null,
+        valid_hours: 3,
+      }),
+    });
+    alertId = alert.alert_id;
+  } catch (err) {
+    console.warn('Nearby SOS broadcast unavailable:', err);
+  }
+
+  return { reportId, journeyId, shareToken, shareUrl, alertId, radiusMeters };
+}
+
+export async function fetchNearbySosAlerts(
+  center: LatLng,
+  radiusMeters = 25000,
+): Promise<NearbySosAlert[]> {
+  const data = await apiRequest<{
+    alerts: Array<{
+      alert_id: string;
+      client_id?: string | null;
+      latitude: number;
+      longitude: number;
+      reason?: string | null;
+      distance_meters: number;
+      share_token?: string | null;
+      share_url?: string | null;
+      created_at: string;
+      expires_at: string;
+    }>;
+  }>(
+    `/sos/alerts/nearby?latitude=${center[0]}&longitude=${center[1]}&radius_meters=${radiusMeters}`,
+  );
+
+  return (data.alerts ?? []).map((alert) => ({
+    alertId: alert.alert_id,
+    clientId: alert.client_id ?? undefined,
+    position: [alert.latitude, alert.longitude] as LatLng,
+    reason: alert.reason ?? undefined,
+    distanceMeters: alert.distance_meters,
+    shareToken: alert.share_token ?? undefined,
+    shareUrl: alert.share_url ?? undefined,
+    createdAt: alert.created_at,
+    expiresAt: alert.expires_at,
+  }));
+}
+
+export async function resolveSosAlert(alertId: string, clientId: string): Promise<void> {
+  await apiRequest(`/sos/alerts/${alertId}/resolve?client_id=${encodeURIComponent(clientId)}`, {
+    method: 'PATCH',
+  });
+}
+
+export function buildSmsUrl(phone: string, body: string): string {
+  const cleaned = phone.replace(/[^\d+]/g, '');
+  return `sms:${cleaned}?body=${encodeURIComponent(body)}`;
+}
+
+/** Hand off to the device SMS app. The user still confirms the message in their SMS app. */
+export function openSmsApp(smsUrl: string): void {
+  const link = document.createElement('a');
+  link.href = smsUrl;
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }
 
 
