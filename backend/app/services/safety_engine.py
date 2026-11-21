@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import math
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from app.schemas.route import (
     RoutePreference,
     SafetyIndicator,
