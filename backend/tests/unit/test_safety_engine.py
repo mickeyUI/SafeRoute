@@ -1,20 +1,24 @@
-import pytest
+from app.schemas.route import GeoJSONLineString, RouteOption, RoutePreference, SafetyIndicator
 from app.services.safety_engine import safety_engine
-from app.schemas.route import RoutePreference, GeoJSONLineString, RouteOption, SafetyIndicator
+
 
 def test_haversine_distance():
-    # Distance between Addis Ababa Piassa (9.035, 38.75) and Arat Kilo (9.033, 38.762) is roughly 1.3 - 1.4 km
+    # Piassa (9.035, 38.75) to Arat Kilo (9.033, 38.762) is roughly 1.3 - 1.4 km
     p1 = (38.7500, 9.0350)
     p2 = (38.7620, 9.0330)
     d = safety_engine.haversine_distance(p1, p2)
     assert 1200 < d < 1500
 
+
 def test_lighting_and_isolation_scoring():
     # Arterial avenue has lower isolation risk than an alley
     l_ave, s_ave, _ = safety_engine.calculate_lighting_and_isolation("Churchill Avenue")
-    l_alley, s_alley, _ = safety_engine.calculate_lighting_and_isolation("Narrow unlit alley shortcut")
+    l_alley, s_alley, _ = safety_engine.calculate_lighting_and_isolation(
+        "Narrow unlit alley shortcut"
+    )
     assert s_ave < s_alley
     assert l_ave < l_alley
+
 
 def test_route_ranking_by_safety():
     # Route A: Short but dangerous (high risk 80)
@@ -25,8 +29,13 @@ def test_route_ranking_by_safety():
         data_coverage_score=85.0,
         incident_count=3,
         safe_haven_count=0,
-        factors={"incident_risk": 80, "lighting_risk": 80, "isolation_risk": 80, "activity_risk": 80},
-        observations=["High incident corridor"]
+        factors={
+            "incident_risk": 80,
+            "lighting_risk": 80,
+            "isolation_risk": 80,
+            "activity_risk": 80,
+        },
+        observations=["High incident corridor"],
     )
     indicator_safe = SafetyIndicator(
         overall_risk_score=20.0,
@@ -34,8 +43,13 @@ def test_route_ranking_by_safety():
         data_coverage_score=80.0,
         incident_count=0,
         safe_haven_count=2,
-        factors={"incident_risk": 15, "lighting_risk": 20, "isolation_risk": 25, "activity_risk": 20},
-        observations=["Safe well lit corridor"]
+        factors={
+            "incident_risk": 15,
+            "lighting_risk": 20,
+            "isolation_risk": 25,
+            "activity_risk": 20,
+        },
+        observations=["Safe well lit corridor"],
     )
 
     opt_risky = RouteOption(
@@ -45,7 +59,7 @@ def test_route_ranking_by_safety():
         duration_seconds=750,
         cost_score=0,
         safety_indicator=indicator_risky,
-        geometry=GeoJSONLineString(coordinates=[[38.75, 9.03], [38.76, 9.03]])
+        geometry=GeoJSONLineString(coordinates=[[38.75, 9.03], [38.76, 9.03]]),
     )
     opt_safe = RouteOption(
         route_id="r_long_safe",
@@ -54,7 +68,7 @@ def test_route_ranking_by_safety():
         duration_seconds=980,
         cost_score=0,
         safety_indicator=indicator_safe,
-        geometry=GeoJSONLineString(coordinates=[[38.75, 9.03], [38.755, 9.035], [38.76, 9.03]])
+        geometry=GeoJSONLineString(coordinates=[[38.75, 9.03], [38.755, 9.035], [38.76, 9.03]]),
     )
 
     ranked_safety = safety_engine.rank_routes([opt_risky, opt_safe], RoutePreference.SAFETY)
@@ -64,6 +78,7 @@ def test_route_ranking_by_safety():
     ranked_fast = safety_engine.rank_routes([opt_risky, opt_safe], RoutePreference.FASTEST)
     # When speed is prioritized, the shorter route ranks first
     assert ranked_fast[0].route_id == "r_short_risky"
+
 
 if __name__ == "__main__":
     test_haversine_distance()

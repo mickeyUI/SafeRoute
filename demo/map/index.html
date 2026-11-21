@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SafeRoute Map Demo</title>
+    <link rel="stylesheet" href="./vendor/leaflet.css" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="toolbar">
+      <div class="brand">
+        <strong>SafeRoute</strong>
+        <span>route safety visualizer</span>
+      </div>
+
+      <label>
+        Travel mode
+        <select id="travelMode">
+          <option value="walk" selected>Walk</option>
+          <option value="bike">Bike</option>
+          <option value="drive">Drive</option>
+        </select>
+      </label>
+
+      <label>
+        Alternatives
+        <input id="alternatives" type="number" min="1" max="5" value="3" />
+      </label>
+
+      <fieldset class="picker">
+        <legend>Click map to set</legend>
+        <label><input type="radio" name="active" value="origin" /> Origin</label>
+        <label><input type="radio" name="active" value="destination" checked /> Destination</label>
+      </fieldset>
+
+      <button id="demoBtn" type="button">Reset demo</button>
+      <button id="compareBtn" class="primary" type="button">Compare routes</button>
+    </header>
+
+    <main>
+      <div id="map" aria-label="Route map"></div>
+      <aside class="panel">
+        <h2>Alternatives</h2>
+        <p id="status" class="status">
+          Drag the A/B markers or click the map, then press <strong>Compare routes</strong>.
+        </p>
+        <ol id="results"></ol>
+        <div class="legend">
+          <h3>Safety score</h3>
+          <div><span class="swatch green"></span> 80–100 · safer</div>
+          <div><span class="swatch amber"></span> 60–79 · moderate</div>
+          <div><span class="swatch red"></span> 0–59 · caution</div>
+        </div>
+        <p class="note">
+          Scores are sample backend output. Reports must be moderated and safe locations
+          verified before they affect the score.
+        </p>
+      </aside>
+    </main>
+
+    <script src="./vendor/leaflet.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

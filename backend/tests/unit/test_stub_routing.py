@@ -18,6 +18,4 @@ def test_options_are_sorted_by_distance_and_deterministic() -> None:
     first = provider.get_routes(ORIGIN, DESTINATION, TravelMode.walk, 3)
     second = provider.get_routes(ORIGIN, DESTINATION, TravelMode.walk, 3)
     assert first == second
-    assert [option.distance_m for option in first] == sorted(
-        option.distance_m for option in first
-    )
+    assert [option.distance_m for option in first] == sorted(option.distance_m for option in first)

@@ -37,15 +37,12 @@ def list_nearby(
     report_geog = func.cast(Report.location, Geography)
     point_geog = func.cast(geometry, Geography)
     distance = func.ST_Distance(report_geog, point_geog).label("distance_m")
-    stmt = select(Report, distance).where(
-        func.ST_DWithin(report_geog, point_geog, radius_m)
-    )
+    stmt = select(Report, distance).where(func.ST_DWithin(report_geog, point_geog, radius_m))
     if approved_only:
         stmt = stmt.where(Report.status == ReportStatus.approved)
     stmt = stmt.order_by(distance).limit(limit)
     return [
-        (cast(Report, report), float(cast(float, dist)))
-        for report, dist in db.execute(stmt).all()
+        (cast(Report, report), float(cast(float, dist))) for report, dist in db.execute(stmt).all()
     ]
 
 

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Optional, List, Any
-from enum import Enum
 from datetime import datetime
+from enum import Enum
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -33,15 +32,15 @@ class ModerationStatus(str, Enum):
 
 
 class ReportCreate(BaseModel):
-    category: Optional[ReportCategory] = None
-    type: Optional[ReportType] = None
-    latitude: Optional[float] = Field(default=None, ge=-90.0, le=90.0)
-    longitude: Optional[float] = Field(default=None, ge=-180.0, le=180.0)
-    location: Optional[Point] = None
+    category: ReportCategory | None = None
+    type: ReportType | None = None
+    latitude: float | None = Field(default=None, ge=-90.0, le=90.0)
+    longitude: float | None = Field(default=None, ge=-180.0, le=180.0)
+    location: Point | None = None
     severity: int = Field(default=3, ge=1, le=5)
-    description: Optional[str] = Field(default=None, max_length=1000)
+    description: str | None = Field(default=None, max_length=1000)
     is_anonymous: bool = True
-    occurred_at: Optional[datetime] = None
+    occurred_at: datetime | None = None
 
 
 class ReportRead(BaseModel):
@@ -80,18 +79,18 @@ class ReportOut(BaseModel):
     latitude: float
     longitude: float
     severity: int
-    description: Optional[str] = None
+    description: str | None = None
     status: ModerationStatus
     is_anonymous: bool
     created_at: datetime
-    reported_days_ago: Optional[int] = 0
+    reported_days_ago: int | None = 0
 
 
 class ReportGeoJSONProperties(BaseModel):
     id: str
     category: ReportCategory
     severity: int
-    description: Optional[str]
+    description: str | None
     status: ModerationStatus
     reported_days_ago: int
 
@@ -104,4 +103,4 @@ class ReportGeoJSONFeature(BaseModel):
 
 class ReportGeoJSONCollection(BaseModel):
     type: str = "FeatureCollection"
-    features: List[ReportGeoJSONFeature]
+    features: list[ReportGeoJSONFeature]

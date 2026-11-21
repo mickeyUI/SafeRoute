@@ -1,4 +1,4 @@
-# Demo script (backend only)
+# Demo script
 
 This walkthrough uses the `stub` routing provider, so no external API keys are needed.
 
@@ -14,6 +14,10 @@ make dev
 
 Open <http://localhost:8000/docs> for interactive Swagger UI.
 
+To use the connected React frontend instead, run `make web-install && make web-dev` in
+a second terminal and open <http://localhost:5173>. It proxies `/api` to the backend.
+The minimal static map is still available at <http://localhost:8000/demo/map/>.
+
 ## 2. Health checks
 
 ```bash
@@ -23,6 +27,14 @@ curl -s localhost:8000/api/v1/health/ready
 
 Expected: `{"status":"ok","version":"0.1.0","routing_provider":"stub"}` and a
 `database: ok` payload with a PostGIS version string.
+
+## 2b. Open the visual map
+
+<http://localhost:8000/demo/map/>
+
+The page loads with the same San Francisco endpoints used below and automatically calls
+`/routes/compare`. Drag markers A/B or select an endpoint and click the map, then press
+**Compare routes** again. Lines are colored by safety score; click one for its factors.
 
 ## 3. Register, log in, and capture a token
 

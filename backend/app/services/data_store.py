@@ -1,12 +1,14 @@
-import uuid
-import math
 import hashlib
-from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Any, Optional
-from app.schemas.report import ReportCategory, ModerationStatus, ReportCreate
-from app.schemas.safe_location import SafeLocationCategory
-from app.schemas.journey import JourneyStatus
+import math
+import uuid
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
 from app.schemas.contact import ContactCreate
+from app.schemas.journey import JourneyStatus
+from app.schemas.report import ModerationStatus, ReportCategory, ReportCreate
+from app.schemas.safe_location import SafeLocationCategory
+
 
 class DataStore:
     """
@@ -15,12 +17,13 @@ class DataStore:
     """
 
     def __init__(self):
-        self.reports: Dict[str, Dict[str, Any]] = {}
-        self.safe_locations: Dict[str, Dict[str, Any]] = {}
-        self.journeys: Dict[str, Dict[str, Any]] = {}
-        self.shares: Dict[str, Dict[str, Any]] = {}
-        self.contacts: Dict[str, Dict[str, Any]] = {}
-        self.users: Dict[str, Dict[str, Any]] = {}
+        self.reports: dict[str, dict[str, Any]] = {}
+        self.safe_locations: dict[str, dict[str, Any]] = {}
+        self.journeys: dict[str, dict[str, Any]] = {}
+        self.shares: dict[str, dict[str, Any]] = {}
+        self.contacts: dict[str, dict[str, Any]] = {}
+        self.users: dict[str, dict[str, Any]] = {}
+        self.sos_alerts: dict[str, dict[str, Any]] = {}
         self.seed_initial_data()
 
     @staticmethod
@@ -30,8 +33,10 @@ class DataStore:
         phi2 = math.radians(lat2)
         delta_phi = math.radians(lat2 - lat1)
         delta_lambda = math.radians(lon2 - lon1)
-        a = (math.sin(delta_phi / 2.0) ** 2 +
-             math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2.0) ** 2)
+        a = (
+            math.sin(delta_phi / 2.0) ** 2
+            + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2.0) ** 2
+        )
         c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
         return R * c
 
@@ -40,7 +45,7 @@ class DataStore:
         return hashlib.sha256(password.encode()).hexdigest()
 
     def seed_initial_data(self):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # 0. Seed Demo User
         demo_user_id = "user_demo_123"
@@ -50,22 +55,28 @@ class DataStore:
             "password_hash": self.hash_password("SafeRoute2026!"),
             "full_name": "Safe Traveler",
             "role": "user",
-            "created_at": now
+            "created_at": now,
         }
 
         # Seed Trusted Contacts for Demo User
-        self.create_contact(demo_user_id, ContactCreate(
-            name="Sara (Sister / Roommate)",
-            phone="+251 91 123 4567",
-            email="sara@example.com",
-            relationship="Family"
-        ))
-        self.create_contact(demo_user_id, ContactCreate(
-            name="AAU Campus Security Office",
-            phone="+251 11 123 4567",
-            email="security@aau.edu.et",
-            relationship="Campus Safety"
-        ))
+        self.create_contact(
+            demo_user_id,
+            ContactCreate(
+                name="Sara (Sister / Roommate)",
+                phone="+251 91 123 4567",
+                email="sara@example.com",
+                relationship="Family",
+            ),
+        )
+        self.create_contact(
+            demo_user_id,
+            ContactCreate(
+                name="AAU Campus Security Office",
+                phone="+251 11 123 4567",
+                email="security@aau.edu.et",
+                relationship="Campus Safety",
+            ),
+        )
 
         # 1. Verified Safe Locations in Addis Ababa
         safe_places = [
@@ -78,7 +89,7 @@ class DataStore:
                 "description": "24/7 Police station with public front desk and secure lighting.",
                 "contact_phone": "+251 11 155 1200",
                 "is_24_7": True,
-                "verification_status": "verified"
+                "verification_status": "verified",
             },
             {
                 "id": str(uuid.uuid4()),
@@ -89,7 +100,7 @@ class DataStore:
                 "description": "Stationed near AAU Campus, staffed round the clock.",
                 "contact_phone": "+251 11 123 4567",
                 "is_24_7": True,
-                "verification_status": "verified"
+                "verification_status": "verified",
             },
             {
                 "id": str(uuid.uuid4()),
@@ -100,7 +111,7 @@ class DataStore:
                 "description": "24/7 Emergency department with continuous security personnel.",
                 "contact_phone": "+251 11 275 0125",
                 "is_24_7": True,
-                "verification_status": "verified"
+                "verification_status": "verified",
             },
             {
                 "id": str(uuid.uuid4()),
@@ -111,7 +122,7 @@ class DataStore:
                 "description": "Large medical center, brightly lit main entrance, 24/7 security.",
                 "contact_phone": "+251 11 551 1211",
                 "is_24_7": True,
-                "verification_status": "verified"
+                "verification_status": "verified",
             },
             {
                 "id": str(uuid.uuid4()),
@@ -122,7 +133,7 @@ class DataStore:
                 "description": "Well-lit 24/7 community pharmacy on commercial street.",
                 "contact_phone": "+251 11 111 8899",
                 "is_24_7": True,
-                "verification_status": "verified"
+                "verification_status": "verified",
             },
             {
                 "id": str(uuid.uuid4()),
@@ -133,8 +144,8 @@ class DataStore:
                 "description": "Registered commercial safety partner with security presence.",
                 "contact_phone": "+251 11 662 0011",
                 "is_24_7": True,
-                "verification_status": "verified"
-            }
+                "verification_status": "verified",
+            },
         ]
         for sp in safe_places:
             self.safe_locations[sp["id"]] = sp
@@ -147,7 +158,10 @@ class DataStore:
                 "latitude": 9.0270,
                 "longitude": 38.7460,
                 "severity": 4,
-                "description": "Three consecutive street lamps broken. Pedestrians must walk in complete darkness.",
+                "description": (
+                    "Three consecutive street lamps broken. Pedestrians must walk "
+                    "in complete darkness."
+                ),
                 "status": ModerationStatus.APPROVED,
                 "is_anonymous": True,
                 "created_at": now - timedelta(days=2),
@@ -158,7 +172,10 @@ class DataStore:
                 "latitude": 9.0255,
                 "longitude": 38.7475,
                 "severity": 4,
-                "description": "Group loitering near unlit corner regularly catcalling and intimidating female commuters.",
+                "description": (
+                    "Group loitering near unlit corner regularly catcalling and "
+                    "intimidating female commuters."
+                ),
                 "status": ModerationStatus.APPROVED,
                 "is_anonymous": False,
                 "created_at": now - timedelta(days=5),
@@ -169,7 +186,10 @@ class DataStore:
                 "latitude": 9.0315,
                 "longitude": 38.7440,
                 "severity": 3,
-                "description": "Construction fence blocks sidewalk, forcing pedestrians into narrow blind spot.",
+                "description": (
+                    "Construction fence blocks sidewalk, forcing pedestrians into "
+                    "narrow blind spot."
+                ),
                 "status": ModerationStatus.APPROVED,
                 "is_anonymous": True,
                 "created_at": now - timedelta(days=12),
@@ -180,7 +200,9 @@ class DataStore:
                 "latitude": 9.0140,
                 "longitude": 38.7580,
                 "severity": 3,
-                "description": "Bus stop lacks shelter and lighting; gets very deserted after 8:00 PM.",
+                "description": (
+                    "Bus stop lacks shelter and lighting; gets very deserted after 8:00 PM."
+                ),
                 "status": ModerationStatus.APPROVED,
                 "is_anonymous": True,
                 "created_at": now - timedelta(days=8),
@@ -195,13 +217,13 @@ class DataStore:
                 "status": ModerationStatus.APPROVED,
                 "is_anonymous": True,
                 "created_at": now - timedelta(days=18),
-            }
+            },
         ]
         for rep in community_reports:
             self.reports[rep["id"]] = rep
 
     # --- User Auth Methods ---
-    def register_user(self, email: str, password: str, full_name: str = "") -> Dict[str, Any]:
+    def register_user(self, email: str, password: str, full_name: str = "") -> dict[str, Any]:
         email_clean = email.lower().strip()
         if email_clean in self.users:
             return None
@@ -212,7 +234,7 @@ class DataStore:
             "password_hash": self.hash_password(password),
             "full_name": full_name or email_clean.split("@")[0].title(),
             "role": "user",
-            "created_at": datetime.now(timezone.utc)
+            "created_at": datetime.now(UTC),
         }
         self.users[email_clean] = record
 
@@ -242,14 +264,16 @@ class DataStore:
 
         return record
 
-    def authenticate_user(self, email: str, password: str) -> Optional[Dict[str, Any]]:
+    def authenticate_user(self, email: str, password: str) -> dict[str, Any] | None:
         email_clean = email.lower().strip()
         user = self.users.get(email_clean)
         if not user or user["password_hash"] != self.hash_password(password):
             return None
         return user
 
-    def get_or_create_google_user(self, email: str, full_name: str = "", avatar_url: Optional[str] = None) -> Dict[str, Any]:
+    def get_or_create_google_user(
+        self, email: str, full_name: str = "", avatar_url: str | None = None
+    ) -> dict[str, Any]:
         email_clean = email.lower().strip()
         user = self.users.get(email_clean)
         if user:
@@ -268,7 +292,7 @@ class DataStore:
             "role": "user",
             "provider": "google",
             "avatar_url": avatar_url,
-            "created_at": datetime.now(timezone.utc)
+            "created_at": datetime.now(UTC),
         }
         self.users[email_clean] = record
 
@@ -297,14 +321,14 @@ class DataStore:
 
         return record
 
-    def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
+    def get_user_by_id(self, user_id: str) -> dict[str, Any] | None:
         for u in self.users.values():
             if u["id"] == user_id:
                 return u
         return None
 
     # --- Trusted Contacts Methods ---
-    def create_contact(self, user_id: str, contact_in: ContactCreate) -> Dict[str, Any]:
+    def create_contact(self, user_id: str, contact_in: ContactCreate) -> dict[str, Any]:
         contact_id = f"cnt_{uuid.uuid4().hex[:10]}"
         record = {
             "id": contact_id,
@@ -313,7 +337,7 @@ class DataStore:
             "phone": contact_in.phone,
             "email": contact_in.email,
             "relationship": contact_in.relationship or "Family / Friend",
-            "created_at": datetime.now(timezone.utc)
+            "created_at": datetime.now(UTC),
         }
         self.contacts[contact_id] = record
 
@@ -363,7 +387,7 @@ class DataStore:
 
         return record
 
-    def list_contacts(self, user_id: str) -> List[Dict[str, Any]]:
+    def list_contacts(self, user_id: str) -> list[dict[str, Any]]:
         return [c for c in self.contacts.values() if c["user_id"] == user_id]
 
     def delete_contact(self, contact_id: str, user_id: str) -> bool:
@@ -398,8 +422,37 @@ class DataStore:
             pass
         return True
 
+    # --- SOS Alert Methods ---
+    def create_sos_alert(
+        self,
+        reporter_id: str,
+        location: list[float],
+        reason: str | None = None,
+        voice_attached: bool = False,
+        picture_name: str | None = None,
+    ) -> dict[str, Any]:
+        alert_id = str(uuid.uuid4())
+        record = {
+            "id": alert_id,
+            "reporter_id": reporter_id,
+            "location": location,
+            "reason": reason,
+            "voice_attached": voice_attached,
+            "picture_name": picture_name,
+            "status": "active",
+            "created_at": datetime.now(UTC),
+            "responded_at": None,
+        }
+        self.sos_alerts[alert_id] = record
+        return record
+
+    def list_sos_alerts(self, reporter_id: str, limit: int = 25) -> list[dict[str, Any]]:
+        alerts = [a for a in self.sos_alerts.values() if a["reporter_id"] == reporter_id]
+        alerts.sort(key=lambda a: a["created_at"], reverse=True)
+        return alerts[:limit]
+
     # --- Incident Report Methods ---
-    def create_report(self, report_in: ReportCreate, user_id: Optional[str] = None) -> Dict[str, Any]:
+    def create_report(self, report_in: ReportCreate, user_id: str | None = None) -> dict[str, Any]:
         report_id = str(uuid.uuid4())
         item = {
             "id": report_id,
@@ -411,8 +464,8 @@ class DataStore:
             "description": report_in.description,
             "status": ModerationStatus.APPROVED,
             "is_anonymous": report_in.is_anonymous,
-            "created_at": datetime.now(timezone.utc),
-            "reported_days_ago": 0
+            "created_at": datetime.now(UTC),
+            "reported_days_ago": 0,
         }
         self.reports[report_id] = item
         return item
@@ -422,10 +475,10 @@ class DataStore:
         lat: float,
         lon: float,
         radius_meters: float = 3000.0,
-        status: Optional[ModerationStatus] = ModerationStatus.APPROVED
-    ) -> List[Dict[str, Any]]:
+        status: ModerationStatus | None = ModerationStatus.APPROVED,
+    ) -> list[dict[str, Any]]:
         results = []
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for rep in self.reports.values():
             if status and rep["status"] != status:
                 continue
@@ -439,11 +492,8 @@ class DataStore:
 
     # --- Safe Locations Methods ---
     def get_nearby_safe_locations(
-        self,
-        lat: float,
-        lon: float,
-        radius_meters: float = 5000.0
-    ) -> List[Dict[str, Any]]:
+        self, lat: float, lon: float, radius_meters: float = 5000.0
+    ) -> list[dict[str, Any]]:
         results = []
         for loc in self.safe_locations.values():
             dist = self.haversine_distance(lat, lon, loc["latitude"], loc["longitude"])
@@ -460,10 +510,10 @@ class DataStore:
         dest_lat: float,
         dest_lon: float,
         duration_seconds: int = 1800,
-        route_coords: Optional[List[List[float]]] = None
-    ) -> Dict[str, Any]:
+        route_coords: list[list[float]] | None = None,
+    ) -> dict[str, Any]:
         journey_id = f"jrn_{uuid.uuid4().hex[:10]}"
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         journey = {
             "id": journey_id,
             "user_id": user_id,
@@ -474,26 +524,28 @@ class DataStore:
             "estimated_arrival_at": now + timedelta(seconds=duration_seconds),
             "ended_at": None,
             "route_coordinates": route_coords or [],
-            "checkins": []
+            "checkins": [],
         }
         self.journeys[journey_id] = journey
         return journey
 
-    def get_journey(self, journey_id: str) -> Optional[Dict[str, Any]]:
+    def get_journey(self, journey_id: str) -> dict[str, Any] | None:
         return self.journeys.get(journey_id)
 
-    def add_checkin(self, journey_id: str, lat: float, lon: float, checkin_type: str, note: Optional[str]) -> Optional[Dict[str, Any]]:
+    def add_checkin(
+        self, journey_id: str, lat: float, lon: float, checkin_type: str, note: str | None
+    ) -> dict[str, Any] | None:
         journey = self.journeys.get(journey_id)
         if not journey:
             return None
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         checkin = {
             "id": str(uuid.uuid4()),
             "latitude": lat,
             "longitude": lon,
             "checkin_type": checkin_type,
             "note": note,
-            "created_at": now
+            "created_at": now,
         }
         journey["checkins"].append(checkin)
         if checkin_type == "arrival":
@@ -501,43 +553,43 @@ class DataStore:
             journey["ended_at"] = now
         return checkin
 
-    def complete_journey(self, journey_id: str) -> Optional[Dict[str, Any]]:
+    def complete_journey(self, journey_id: str) -> dict[str, Any] | None:
         journey = self.journeys.get(journey_id)
         if not journey:
             return None
         journey["status"] = JourneyStatus.ARRIVED
-        journey["ended_at"] = datetime.now(timezone.utc)
+        journey["ended_at"] = datetime.now(UTC)
         return journey
 
-    def cancel_journey(self, journey_id: str) -> Optional[Dict[str, Any]]:
+    def cancel_journey(self, journey_id: str) -> dict[str, Any] | None:
         journey = self.journeys.get(journey_id)
         if not journey:
             return None
         journey["status"] = JourneyStatus.CANCELLED
-        journey["ended_at"] = datetime.now(timezone.utc)
+        journey["ended_at"] = datetime.now(UTC)
         return journey
 
-    def end_journey(self, journey_id: str) -> Optional[Dict[str, Any]]:
+    def end_journey(self, journey_id: str) -> dict[str, Any] | None:
         return self.complete_journey(journey_id)
 
-    def create_share_token(self, journey_id: str, valid_hours: int = 2) -> Dict[str, Any]:
+    def create_share_token(self, journey_id: str, valid_hours: int = 2) -> dict[str, Any]:
         raw_token = f"share_{uuid.uuid4().hex}"
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expires_at = now + timedelta(hours=valid_hours)
         share_record = {
             "token": raw_token,
             "journey_id": journey_id,
             "expires_at": expires_at,
             "is_revoked": False,
-            "created_at": now
+            "created_at": now,
         }
         self.shares[raw_token] = share_record
         return share_record
 
-    def get_share_by_token(self, raw_token: str) -> Optional[Dict[str, Any]]:
+    def get_share_by_token(self, raw_token: str) -> dict[str, Any] | None:
         return self.shares.get(raw_token)
 
-    def create_safe_location(self, loc_data: Dict[str, Any]) -> Dict[str, Any]:
+    def create_safe_location(self, loc_data: dict[str, Any]) -> dict[str, Any]:
         loc_id = str(loc_data.get("id") or uuid.uuid4())
         coords = loc_data.get("location")
         lat = loc_data.get("latitude")
@@ -560,9 +612,10 @@ class DataStore:
             "is_24_7": loc_data.get("is_24_7", True),
             "verification_status": "verified" if loc_data.get("is_verified") else "pending",
             "is_verified": bool(loc_data.get("is_verified", False)),
-            "created_at": datetime.now(timezone.utc)
+            "created_at": datetime.now(UTC),
         }
         self.safe_locations[loc_id] = record
         return record
+
 
 data_store = DataStore()
