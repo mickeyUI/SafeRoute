@@ -1,38 +1,91 @@
-"""Authentication endpoints."""
-
-from __future__ import annotations
-
-from fastapi import APIRouter, Depends, status
-from sqlalchemy.orm import Session
-
+from typing import Dict, Any, Optional
+from datetime import datetime, timezone, timedelta
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
+import jwt
 from app.core.config import settings
-from app.core.security import create_access_token
-from app.db.session import get_db
-from app.models.user import User
-from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserRead
-from app.services.auth_service import (
-    authenticate_user,
-    get_current_active_user,
-    register_user,
-)
+from app.core.security import get_current_user
+from app.services.data_store import data_store
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+router = APIRouter()
 
+class RegisterRequest(BaseModel):
+    email: str = Field(..., min_length=5, max_length=120)
+    password: str = Field(..., min_length=6, max_length=128)
+    full_name: Optional[str] = ""
 
-@router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
-def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> User:
-    return register_user(db, payload)
+class LoginRequest(BaseModel):
+    email: str = Field(..., min_length=5, max_length=120)
+    password: str = Field(..., min_length=1, max_length=128)
 
+def create_access_token(user_id: str, email: str, role: str = "user") -> str:
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": user_id,
+        "email": email,
+        "role": role,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(days=7)).timestamp())
+    }
+    return jwt.encode(payload, settings.SUPABASE_JWT_SECRET, algorithm="HS256")
 
-@router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
-    user = authenticate_user(db, payload)
-    return TokenResponse(
-        access_token=create_access_token(user.id),
-        expires_in=settings.access_token_expire_minutes * 60,
+@router.post("/register", status_code=status.HTTP_201_CREATED)
+async def register(payload: RegisterRequest):
+    """
+    Register a new user account with email and password.
+    """
+    user = data_store.register_user(
+        email=payload.email,
+        password=payload.password,
+        full_name=payload.full_name or ""
     )
+    if not user:
+        raise HTTPException(status_code=409, detail="An account with this email already exists.")
+    
+    token = create_access_token(user["id"], user["email"], user["role"])
+    return {
+        "user": {
+            "id": user["id"],
+            "email": user["email"],
+            "full_name": user["full_name"],
+            "role": user["role"]
+        },
+        "access_token": token,
+        "token_type": "bearer"
+    }
 
+@router.post("/login")
+async def login(payload: LoginRequest):
+    """
+    Authenticate user and return JWT access token.
+    """
+    user = data_store.authenticate_user(payload.email, payload.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password."
+        )
+    
+    token = create_access_token(user["id"], user["email"], user["role"])
+    return {
+        "user": {
+            "id": user["id"],
+            "email": user["email"],
+            "full_name": user["full_name"],
+            "role": user["role"]
+        },
+        "access_token": token,
+        "token_type": "bearer"
+    }
 
-@router.get("/me", response_model=UserRead)
-def me(current_user: User = Depends(get_current_active_user)) -> User:
-    return current_user
+@router.get("/me")
+async def get_my_profile(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    Returns authenticated user profile.
+    """
+    return {
+        "id": current_user["id"],
+        "email": current_user["email"],
+        "username": current_user.get("username", "SafeTraveler"),
+        "role": "user"
+    }

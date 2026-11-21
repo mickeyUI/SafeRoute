@@ -18,6 +18,12 @@ class JourneyStatus(str, enum.Enum):
     active = "active"
     completed = "completed"
     cancelled = "cancelled"
+    PLANNED = "planned"
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    ARRIVED = "completed"
+    EXPIRED = "cancelled"
 
 
 class Journey(TimestampMixin, Base):

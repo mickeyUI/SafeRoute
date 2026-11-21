@@ -1,9 +1,6 @@
-"""FastAPI application factory, CORS, error handlers, and liveness endpoint."""
-
 from __future__ import annotations
 
 from uuid import uuid4
-
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -11,11 +8,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
-from app import __version__
-from app.api.v1.router import router as api_v1_router
 from app.core.config import settings
 from app.core.errors import AppError
 from app.core.logging import configure_logging
+from app.api.v1.api_router import api_router
 
 
 def _error_response(
@@ -41,15 +37,16 @@ def _error_response(
 def create_app() -> FastAPI:
     configure_logging(settings)
 
-    app = FastAPI(
-        title=settings.app_name,
-        version=settings.version or __version__,
-        description="Safety-aware route comparison API",
-        docs_url="/docs" if settings.debug else None,
+    application = FastAPI(
+        title=settings.PROJECT_NAME,
+        version=settings.version,
+        description="SafeRoute API: Community-powered safety navigation and pedestrian travel decision support.",
+        docs_url="/docs",
         redoc_url="/redoc" if settings.debug else None,
     )
 
-    app.add_middleware(
+    # CORS
+    application.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,
         allow_credentials=True,
@@ -57,43 +54,50 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    @app.middleware("http")
-    async def request_id_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
+    # Request ID tracing middleware
+    @application.middleware("http")
+    async def request_id_middleware(request: Request, call_next):
         request.state.request_id = request.headers.get("x-request-id") or str(uuid4())
         response = await call_next(request)
         response.headers["x-request-id"] = request.state.request_id
         return response
 
-    @app.exception_handler(AppError)
+    @application.exception_handler(AppError)
     async def handle_app_error(request: Request, exc: AppError) -> JSONResponse:
-        return _error_response(
-            request, exc.status_code, exc.code, exc.message, exc.details
-        )
+        return _error_response(request, exc.status_code, exc.code, exc.message, exc.details)
 
-    @app.exception_handler(RequestValidationError)
-    async def handle_validation_error(
-        request: Request, exc: RequestValidationError
-    ) -> JSONResponse:
-        return _error_response(
-            request, 422, "validation_error", "Request validation failed", exc.errors()
-        )
+    @application.exception_handler(RequestValidationError)
+    async def handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+        return _error_response(request, 422, "validation_error", "Request validation failed", exc.errors())
 
-    @app.exception_handler(SQLAlchemyError)
+    @application.exception_handler(SQLAlchemyError)
     async def handle_database_error(request: Request, exc: SQLAlchemyError) -> JSONResponse:
-        return _error_response(
-            request, 500, "database_error", "A database error occurred"
-        )
+        return _error_response(request, 500, "database_error", "A database error occurred")
 
-    @app.get("/health", tags=["health"])
-    def liveness() -> dict:
+    # Root and liveness endpoints
+    @application.get("/")
+    async def root():
+        return {
+            "name": settings.PROJECT_NAME,
+            "status": "online",
+            "version": settings.version,
+            "routing_provider": settings.routing_provider,
+            "docs_url": "/docs",
+            "description": "SafeRoute pedestrian safety scoring and navigation platform."
+        }
+
+    @application.get("/health", tags=["Health"])
+    async def health_check():
         return {
             "status": "ok",
             "version": settings.version,
-            "routing_provider": settings.routing_provider,
+            "routing_provider": settings.routing_provider
         }
 
-    app.include_router(api_v1_router, prefix=settings.api_v1_prefix)
-    return app
+    # Mount API v1 router
+    application.include_router(api_router, prefix=settings.API_V1_STR)
+
+    return application
 
 
 app = create_app()

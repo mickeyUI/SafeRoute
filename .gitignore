@@ -1,5 +1,10 @@
 .env
 .venv/
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
 __pycache__/
 *.py[cod]
 .pytest_cache/

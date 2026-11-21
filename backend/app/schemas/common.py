@@ -10,10 +10,17 @@ T = TypeVar("T")
 
 
 def _validate_point(value: Any) -> list[float]:
-    """Accept [lon, lat] sequences and reject invalid WGS84 values."""
-    if isinstance(value, (str, bytes)) or not hasattr(value, "__iter__"):
+    """Accept [lon, lat] sequences or {latitude, longitude} dicts and validate WGS84 values."""
+    if isinstance(value, dict):
+        lat = value.get("latitude") if "latitude" in value else value.get("lat")
+        lon = value.get("longitude") if "longitude" in value else value.get("lon")
+        if lat is None or lon is None:
+            raise ValueError("coordinate dict must contain latitude and longitude")
+        coords = [float(lon), float(lat)]
+    elif isinstance(value, (str, bytes)) or not hasattr(value, "__iter__"):
         raise ValueError("coordinate must be a [longitude, latitude] pair")
-    coords = [float(item) for item in value]
+    else:
+        coords = [float(item) for item in value]
     if len(coords) != 2:
         raise ValueError("coordinate must contain exactly two values")
     lon, lat = coords

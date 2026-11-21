@@ -1,50 +1,43 @@
-"""Trusted contact endpoints."""
+from typing import List, Optional, Dict, Any
+from fastapi import APIRouter, Depends, HTTPException, status
+from app.schemas.contact import ContactCreate, ContactRead
+from app.services.data_store import data_store
+from app.core.security import get_optional_current_user
 
-from __future__ import annotations
-
-from uuid import UUID
-
-from fastapi import APIRouter, Depends, status
-from sqlalchemy.orm import Session
-
-from app.core.errors import ForbiddenError, NotFoundError
-from app.db.session import get_db
-from app.models.contact import Contact
-from app.models.user import User
-from app.repositories import contacts as contact_repo
-from app.schemas.journey import ContactCreate, ContactRead
-from app.services.auth_service import get_current_active_user
-
-router = APIRouter(prefix="/contacts", tags=["contacts"])
-
+router = APIRouter()
 
 @router.post("", response_model=ContactRead, status_code=status.HTTP_201_CREATED)
-def create_contact(
+async def create_contact(
     payload: ContactCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-) -> Contact:
-    contact = Contact(user_id=current_user.id, **payload.model_dump())
-    return contact_repo.create(db, contact)
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user)
+):
+    """
+    Add a trusted emergency contact (e.g. family member, roommate, security desk).
+    """
+    user_id = current_user.get("id") if current_user else "user_demo_123"
+    created = data_store.create_contact(user_id=user_id, contact_in=payload)
+    return created
 
-
-@router.get("", response_model=list[ContactRead])
-def list_contacts(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-) -> list[Contact]:
-    return contact_repo.list_for_user(db, current_user.id)
-
+@router.get("", response_model=List[ContactRead])
+async def list_contacts(
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user)
+):
+    """
+    Retrieve all trusted contacts associated with the user.
+    """
+    user_id = current_user.get("id") if current_user else "user_demo_123"
+    return data_store.list_contacts(user_id=user_id)
 
 @router.delete("/{contact_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_contact(
-    contact_id: UUID,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-) -> None:
-    contact = contact_repo.get(db, contact_id)
-    if contact is None:
-        raise NotFoundError("Contact not found")
-    if contact.user_id != current_user.id:
-        raise ForbiddenError("This contact belongs to another user")
-    contact_repo.delete(db, contact)
+async def delete_contact(
+    contact_id: str,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user)
+):
+    """
+    Remove a trusted contact.
+    """
+    user_id = current_user.get("id") if current_user else "user_demo_123"
+    deleted = data_store.delete_contact(contact_id=contact_id, user_id=user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return None

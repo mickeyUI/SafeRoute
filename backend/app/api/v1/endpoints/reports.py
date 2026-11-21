@@ -1,76 +1,78 @@
-"""Incident report endpoints."""
-
-from __future__ import annotations
-
-from uuid import UUID
-
-from fastapi import APIRouter, Depends, Query, Request, status
-from sqlalchemy.orm import Session
-
-from app.core.config import settings
-from app.core.rate_limit import client_key, rate_limiter
-from app.db.session import get_db
-from app.models.user import User
-from app.schemas.common import Paginated
+from typing import Optional, Dict, Any
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from app.schemas.report import (
     ReportCreate,
-    ReportModerationRequest,
-    ReportNearby,
-    ReportRead,
+    ReportOut,
+    ModerationStatus,
+    ReportGeoJSONCollection,
+    ReportGeoJSONFeature,
+    ReportGeoJSONProperties
 )
-from app.services import report_service
-from app.services.auth_service import get_current_active_user, require_moderator
-from app.services.moderation_service import moderate_report
+from app.services.data_store import data_store
+from app.core.security import get_optional_current_user
 
-router = APIRouter(prefix="/reports", tags=["reports"])
+router = APIRouter()
 
+@router.post("", response_model=Dict[str, Any], status_code=status.HTTP_201_CREATED)
+async def create_report(
+    report_in: ReportCreate,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user)
+):
+    """
+    Submit a location-based safety concern (harassment, poor lighting, etc.).
+    Supports authenticated or anonymous submissions.
+    """
+    user_id = current_user.get("id") if (current_user and not report_in.is_anonymous) else None
+    created = data_store.create_report(report_in, user_id=user_id)
+    return {
+        "id": created["id"],
+        "status": created["status"],
+        "message": "Report submitted successfully.",
+        "created_at": created["created_at"].isoformat()
+    }
 
-@router.post("", response_model=ReportRead, status_code=status.HTTP_201_CREATED)
-def create_report(
-    payload: ReportCreate,
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-) -> ReportRead:
-    rate_limiter.hit(f"reports:{client_key(request)}")
-    report = report_service.create_report(db, current_user.id, payload)
-    return report_service.to_read(report)
-
-
-@router.get("/nearby", response_model=Paginated[ReportNearby])
-def nearby_reports(
-    lon: float = Query(..., ge=-180, le=180),
-    lat: float = Query(..., ge=-90, le=90),
-    radius_m: float = Query(settings.default_search_radius_m, gt=0),
-    limit: int = Query(25, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    db: Session = Depends(get_db),
-) -> Paginated[ReportNearby]:
-    results = report_service.list_nearby(db, (lon, lat), radius_m, limit + offset)
-    page = results[offset : offset + limit]
-    items = [
-        ReportNearby(**report_service.to_read(report).model_dump(), distance_m=distance)
-        for report, distance in page
-    ]
-    return Paginated(items=items, total=len(results), limit=limit, offset=offset)
-
-
-@router.get("/{report_id}", response_model=ReportRead)
-def get_report(
-    report_id: UUID,
-    db: Session = Depends(get_db),
-) -> ReportRead:
-    return report_service.to_read(report_service.get_report(db, report_id))
-
-
-@router.patch("/{report_id}/moderate", response_model=ReportRead)
-def moderate(
-    report_id: UUID,
-    payload: ReportModerationRequest,
-    db: Session = Depends(get_db),
-    reviewer: User = Depends(require_moderator),
-) -> ReportRead:
-    report = moderate_report(
-        db, report_id, reviewer, payload.status, payload.rejection_reason
+@router.get("/nearby", response_model=ReportGeoJSONCollection)
+async def get_nearby_reports(
+    latitude: float = Query(..., ge=-90.0, le=90.0),
+    longitude: float = Query(..., ge=-180.0, le=180.0),
+    radius_meters: float = Query(default=3000.0, ge=100.0, le=25000.0),
+    status: Optional[ModerationStatus] = Query(default=None)
+):
+    """
+    Retrieve community reports near given coordinates as a GeoJSON FeatureCollection.
+    """
+    raw_reports = data_store.get_nearby_reports(
+        lat=latitude,
+        lon=longitude,
+        radius_meters=radius_meters,
+        status=status
     )
-    return report_service.to_read(report)
+    features = []
+    for r in raw_reports:
+        features.append(ReportGeoJSONFeature(
+            type="Feature",
+            geometry={
+                "type": "Point",
+                "coordinates": [r["longitude"], r["latitude"]]
+            },
+            properties=ReportGeoJSONProperties(
+                id=r["id"],
+                category=r["category"],
+                severity=r["severity"],
+                description=r.get("description"),
+                status=r["status"],
+                reported_days_ago=r.get("reported_days_ago", 0)
+            )
+        ))
+    return ReportGeoJSONCollection(type="FeatureCollection", features=features)
+
+@router.patch("/{report_id}/moderate")
+async def moderate_report(report_id: str, new_status: ModerationStatus):
+    """
+    Update moderation status of a report (approve or reject).
+    """
+    rep = data_store.reports.get(report_id)
+    if not rep:
+        raise HTTPException(status_code=404, detail="Report not found")
+    rep["status"] = new_status
+    return {"id": report_id, "status": new_status, "message": "Report status updated."}

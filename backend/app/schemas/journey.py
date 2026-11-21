@@ -1,7 +1,8 @@
-"""Journey and contact payloads."""
+"""Journey, sharing, and contact payloads."""
 
 from __future__ import annotations
 
+from typing import Optional, List, Any
 from datetime import datetime
 from uuid import UUID
 
@@ -10,14 +11,17 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.models.journey import JourneyStatus
 from app.models.route import TravelMode
 from app.schemas.common import Point
+from app.schemas.route import Coordinate
 
 
 class JourneyCreate(BaseModel):
-    origin: Point
-    destination: Point
+    origin: Any
+    destination: Any
     travel_mode: TravelMode = TravelMode.walk
     route_id: UUID | None = None
     contact_id: UUID | None = None
+    estimated_duration_seconds: Optional[int] = 1800
+    route_coordinates: Optional[List[List[float]]] = None
 
 
 class JourneyRead(BaseModel):
@@ -25,16 +29,42 @@ class JourneyRead(BaseModel):
 
     id: UUID
     user_id: UUID
-    route_id: UUID | None
-    contact_id: UUID | None
+    route_id: UUID | None = None
+    contact_id: UUID | None = None
     origin: Point
     destination: Point
     travel_mode: TravelMode
     status: JourneyStatus
-    started_at: datetime | None
-    check_in_at: datetime | None
-    ended_at: datetime | None
+    started_at: datetime | None = None
+    check_in_at: datetime | None = None
+    ended_at: datetime | None = None
     created_at: datetime
+
+
+class JourneyCheckinCreate(BaseModel):
+    latitude: float
+    longitude: float
+    checkin_type: str = "manual_confirm"  # manual_confirm, milestone, arrival
+    note: Optional[str] = None
+
+
+class JourneyShareCreate(BaseModel):
+    trusted_contact_name: Optional[str] = None
+    trusted_contact_phone: Optional[str] = None
+    valid_hours: int = Field(default=2, ge=1, le=24)
+
+
+class SharedJourneyView(BaseModel):
+    journey_id: str
+    status: Any
+    origin: Coordinate
+    destination: Coordinate
+    started_at: datetime
+    estimated_arrival_at: Optional[datetime] = None
+    last_checkin_at: Optional[datetime] = None
+    last_checkin_type: Optional[str] = None
+    is_valid: bool = True
+    remaining_minutes: int = 120
 
 
 class ContactCreate(BaseModel):
@@ -48,10 +78,10 @@ class ContactCreate(BaseModel):
 class ContactRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: UUID
+    id: Any
     name: str
-    phone: str
-    email: str | None
-    relationship: str | None
-    is_primary: bool
+    phone: Optional[str] = None
+    email: str | None = None
+    relationship: str | None = None
+    is_primary: bool = False
     created_at: datetime
