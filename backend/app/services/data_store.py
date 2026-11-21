@@ -224,6 +224,30 @@ class DataStore:
             return None
         return user
 
+    def get_or_create_google_user(self, email: str, full_name: str = "", avatar_url: Optional[str] = None) -> Dict[str, Any]:
+        email_clean = email.lower().strip()
+        user = self.users.get(email_clean)
+        if user:
+            if full_name and not user.get("full_name"):
+                user["full_name"] = full_name
+            if avatar_url and not user.get("avatar_url"):
+                user["avatar_url"] = avatar_url
+            return user
+
+        user_id = f"usr_g_{uuid.uuid4().hex[:10]}"
+        record = {
+            "id": user_id,
+            "email": email_clean,
+            "password_hash": self.hash_password(f"google_oauth_{uuid.uuid4().hex}"),
+            "full_name": full_name or email_clean.split("@")[0].title(),
+            "role": "user",
+            "provider": "google",
+            "avatar_url": avatar_url,
+            "created_at": datetime.now(timezone.utc)
+        }
+        self.users[email_clean] = record
+        return record
+
     def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
         for u in self.users.values():
             if u["id"] == user_id:

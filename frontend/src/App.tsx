@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import Onboarding from './Onboarding';
+import { clearToken, getCachedUser, getPreferences, type UserPreferences, type UserRead } from './auth';
 import {
   AlertCircle,
   AlertTriangle,
@@ -9,6 +11,8 @@ import {
   Filter,
   ImagePlus,
   LocateFixed,
+  LogIn,
+  LogOut,
   MapPin,
   MapPinned,
   Mic,
@@ -23,6 +27,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Square,
+  User,
   X,
 } from 'lucide-react';
 import {
@@ -152,6 +157,30 @@ function formatDate(value: string): string {
 }
 
 export default function App() {
+  // ── Auth & Preferences state ────────────────────────────────────────────
+  const [currentUser, setCurrentUser] = useState<UserRead | null>(() => getCachedUser());
+  const [userPreferences, setUserPreferences] = useState<UserPreferences | null>(() => getPreferences());
+  const [showOnboarding, setShowOnboarding] = useState(() => !getCachedUser());
+
+  const handleAuthComplete = useCallback((user: UserRead, _token: string, preferences?: UserPreferences) => {
+    setCurrentUser(user);
+    if (preferences) {
+      setUserPreferences(preferences);
+    }
+    setShowOnboarding(false);
+  }, []);
+
+  const handleSkipOnboarding = useCallback(() => {
+    setShowOnboarding(false);
+  }, []);
+
+  function handleSignOut() {
+    clearToken();
+    setCurrentUser(null);
+    setShowOnboarding(true);
+  }
+
+  // ── Map / UI state ──────────────────────────────────────────────────────
   const [reports, setReports] = useState<SafetyReport[]>(() => loadReports());
   const [sosRequests, setSosRequests] = useState<SosRequest[]>(() => loadSosRequests());
   const [mapMode, setMapMode] = useState<MapMode>('idle');
@@ -671,6 +700,11 @@ export default function App() {
           : '';
 
   return (
+    <>
+      {showOnboarding && (
+        <Onboarding onComplete={handleAuthComplete} onSkip={handleSkipOnboarding} />
+      )}
+      {!showOnboarding && (
     <main className={`app-shell ${mapMode !== 'idle' ? 'map-picking' : ''}`} data-theme={theme}>
       <MapContainer
         className="map-canvas"
@@ -828,9 +862,37 @@ export default function App() {
           )}
         </div>
 
-        <div className="top-status">
-          <span className={`status-dot ${backendOnline === true ? 'online' : backendOnline === false ? 'offline' : ''}`} />
-          <span>{backendOnline === true ? 'SafeRoute Engine Connected' : backendOnline === false ? 'Local Mode (Backend Offline)' : 'Connecting…'}</span>
+        <div className="top-right-group">
+          <div className="top-status">
+            <span className={`status-dot ${backendOnline === true ? 'online' : backendOnline === false ? 'offline' : ''}`} />
+            <span>{backendOnline === true ? 'Engine Connected' : backendOnline === false ? 'Local Mode' : 'Connecting…'}</span>
+          </div>
+
+          {currentUser ? (
+            <div className="user-profile-chip" title={`Signed in as ${currentUser.email}`}>
+              <span className="user-avatar-icon"><User size={13} /></span>
+              <span className="user-name">{currentUser.full_name || currentUser.email.split('@')[0]}</span>
+              <button
+                type="button"
+                className="user-signout-btn"
+                onClick={handleSignOut}
+                title="Sign out of SafeRoute"
+                aria-label="Sign out"
+              >
+                <LogOut size={13} />
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="user-signin-btn"
+              onClick={() => setShowOnboarding(true)}
+              title="Sign in or create account"
+            >
+              <LogIn size={13} />
+              <span>Sign in / Join</span>
+            </button>
+          )}
         </div>
       </header>
 
@@ -1063,6 +1125,15 @@ export default function App() {
               {voiceRecording && <p className="recording-hint"><span className="recording-pulse" /> Recording voice note. Press stop when finished.</p>}
               {voiceUrl && <audio className="voice-preview" controls src={voiceUrl}>Audio preview</audio>}
               {sosPhoto && <p className="attachment-name">Picture selected: {sosPhoto.name}</p>}
+              {userPreferences?.emergencyContactName && (
+                <div className="sos-trusted-contact-info">
+                  <Phone size={13} />
+                  <span>
+                    Emergency contact: <strong>{userPreferences.emergencyContactName}</strong>{' '}
+                    {userPreferences.emergencyContactPhone && `(${userPreferences.emergencyContactPhone})`}
+                  </span>
+                </div>
+              )}
               <div className="sos-demo-warning"><AlertTriangle size={15} /><span>{backendOnline ? 'Emergency SOS creates an active tracked journey and alerts SafeRoute dispatch.' : 'Offline mode: SOS request will be stored locally.'}</span></div>
               <button className="sos-submit-button" type="submit" disabled={!sosPoint}><ShieldAlert size={17} /> Send SOS emergency alert</button>
               {lastSosShareUrl && (
@@ -1072,6 +1143,17 @@ export default function App() {
                     {window.location.origin}{lastSosShareUrl}
                   </a>
                   <small>Share this link with trusted contacts to follow your journey live.</small>
+                  {userPreferences?.emergencyContactPhone && (
+                    <a
+                      className="sos-sms-direct-btn"
+                      href={`sms:${userPreferences.emergencyContactPhone}?body=${encodeURIComponent(
+                        `SafeRoute Emergency Alert: Follow my live journey here: ${window.location.origin}${lastSosShareUrl}`
+                      )}`}
+                    >
+                      <Phone size={13} />
+                      <span>SMS tracking link to {userPreferences.emergencyContactName || 'emergency contact'}</span>
+                    </a>
+                  )}
                 </div>
               )}
               {!sosPoint && <p className="required-location-note">Choose GPS or a point on the map to enable sending.</p>}
@@ -1086,5 +1168,7 @@ export default function App() {
 
       <div className="map-footnote">Map data &copy; OpenStreetMap contributors <span>·</span> Route previews are not verified for safety</div>
     </main>
+      )}
+    </>
   );
 }

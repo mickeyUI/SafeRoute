@@ -18,6 +18,12 @@ class LoginRequest(BaseModel):
     email: str = Field(..., min_length=5, max_length=120)
     password: str = Field(..., min_length=1, max_length=128)
 
+class GoogleAuthRequest(BaseModel):
+    email: str = Field(..., min_length=5, max_length=120)
+    full_name: Optional[str] = ""
+    avatar_url: Optional[str] = None
+    id_token: Optional[str] = None
+
 def create_access_token(user_id: str, email: str, role: str = "user") -> str:
     now = datetime.now(timezone.utc)
     payload = {
@@ -73,6 +79,29 @@ async def login(payload: LoginRequest):
             "email": user["email"],
             "full_name": user["full_name"],
             "role": user["role"]
+        },
+        "access_token": token,
+        "token_type": "bearer"
+    }
+
+@router.post("/google")
+async def google_auth(payload: GoogleAuthRequest):
+    """
+    Authenticate or register a user via Google OAuth identity.
+    """
+    user = data_store.get_or_create_google_user(
+        email=payload.email,
+        full_name=payload.full_name or "",
+        avatar_url=payload.avatar_url
+    )
+    token = create_access_token(user["id"], user["email"], user["role"])
+    return {
+        "user": {
+            "id": user["id"],
+            "email": user["email"],
+            "full_name": user["full_name"],
+            "role": user["role"],
+            "avatar_url": user.get("avatar_url")
         },
         "access_token": token,
         "token_type": "bearer"

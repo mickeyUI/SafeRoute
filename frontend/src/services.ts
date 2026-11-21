@@ -6,6 +6,7 @@ import type {
   SafeLocation,
   BackendSafetyIndicator,
 } from './types';
+import { getToken } from './auth';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
 const PHOTON_ENDPOINT = import.meta.env.VITE_GEOCODING_ENDPOINT || 'https://photon.komoot.io/api/';
@@ -41,12 +42,16 @@ export const BACKEND_TO_CATEGORY: Record<string, ReportCategory> = {
 
 async function apiRequest<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const url = endpoint.startsWith('http') ? endpoint : `${API_BASE_URL}${endpoint}`;
+  const token = getToken();
+  const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+
   try {
     const res = await fetch(url, {
       ...options,
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
+        ...authHeaders,
         ...(options?.headers || {}),
       },
     });
@@ -65,6 +70,7 @@ async function apiRequest<T>(endpoint: string, options?: RequestInit): Promise<T
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
+          ...authHeaders,
           ...(options?.headers || {}),
         },
       });
@@ -138,8 +144,10 @@ export async function submitBackendReport(report: {
   description: string;
   position: LatLng;
   severity?: number;
+  isAnonymous?: boolean;
 }): Promise<{ id: string; status: string; message: string }> {
   const backendCategory = CATEGORY_TO_BACKEND[report.category] || 'other';
+  const token = getToken();
   return apiRequest<{ id: string; status: string; message: string }>('/reports', {
     method: 'POST',
     body: JSON.stringify({
@@ -148,7 +156,7 @@ export async function submitBackendReport(report: {
       longitude: report.position[1],
       severity: report.severity ?? 3,
       description: report.description,
-      is_anonymous: true,
+      is_anonymous: report.isAnonymous ?? !token,
     }),
   });
 }

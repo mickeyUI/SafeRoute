@@ -74,3 +74,17 @@ def test_journey_creation_and_sharing():
     assert public_res.status_code == 200
     assert public_res.json()["journey_id"] == j_id
     assert public_res.json()["status"] == "active"
+
+def test_google_auth():
+    payload = {
+        "email": "google_traveler@gmail.com",
+        "full_name": "Google Safety Explorer",
+        "avatar_url": "https://lh3.googleusercontent.com/a/default-user"
+    }
+    res = client.post("/api/v1/auth/google", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert "access_token" in data
+    assert data["user"]["email"] == "google_traveler@gmail.com"
+    assert data["user"]["full_name"] == "Google Safety Explorer"
+
