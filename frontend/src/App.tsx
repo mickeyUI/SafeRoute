@@ -7,9 +7,12 @@ import {
   ArrowRight,
   Check,
   ChevronDown,
+  Copy,
   Crosshair,
   Filter,
   ImagePlus,
+  MessageCircle,
+  Navigation,
   LocateFixed,
   LogIn,
   LogOut,
@@ -41,15 +44,20 @@ import {
 } from 'react-leaflet';
 import {
   buildRouteChoices,
+  buildSmsUrl,
   checkBackendHealth,
   compareRoutesWithBackend,
   fetchBackendReports,
   fetchBackendSafeLocations,
+  fetchNearbySosAlerts,
   formatDistance,
   formatDuration,
+  getClientId,
   getDrivingRoutes,
   scoreRoutesWithLocalReports,
   searchPlaces,
+  openSmsApp,
+  resolveSosAlert,
   submitBackendReport,
   triggerBackendSos,
   type RouteCandidate,
@@ -61,6 +69,7 @@ import {
   REPORT_CATEGORIES,
   type LatLng,
   type MapMode,
+  type NearbySosAlert,
   type PlaceResult,
   type ReportCategory,
   type SafeLocation,
@@ -78,8 +87,22 @@ const REPORT_COLORS: Record<ReportCategory, string> = {
   Other: '#68758a',
 };
 
-type Panel = 'report' | 'sos' | null;
+type Panel = 'report' | 'sos' | 'sos-confirm' | 'sos-result' | null;
 type ThemeId = 'rose' | 'midnight' | 'ocean' | 'forest' | 'lavender';
+
+const SOS_RADIUS_METERS = 2000;
+
+interface SosResult {
+  position: LatLng;
+  reason?: string;
+  alertId?: string;
+  sharePath?: string;
+  shareUrl?: string;
+  smsUrl?: string;
+  contactName?: string;
+  contactPhone?: string;
+  online: boolean;
+}
 
 const THEMES: Array<{ id: ThemeId; name: string; description: string; color: string }> = [
   { id: 'rose', name: 'Rose', description: 'Original white and pink', color: '#d94f91' },
@@ -156,6 +179,24 @@ function formatDate(value: string): string {
     : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
 }
 
+function readGpsPoint(): Promise<LatLng> {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error('This browser does not support device location.'));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (position) => resolve([position.coords.latitude, position.coords.longitude]),
+      () => reject(new Error('Location permission was not granted.')),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 10000 },
+    );
+  });
+}
+
+function mapsLink(point: LatLng): string {
+  return `https://www.google.com/maps?q=${point[0]},${point[1]}`;
+}
+
 export default function App() {
   // ── Auth & Preferences state ────────────────────────────────────────────
   const [currentUser, setCurrentUser] = useState<UserRead | null>(() => getCachedUser());
@@ -230,6 +271,14 @@ export default function App() {
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
   const [lastSosShareUrl, setLastSosShareUrl] = useState<string | null>(null);
 
+  // ── One-tap SOS state ────────────────────────────────────────────────────
+  const clientId = useMemo(() => getClientId(), []);
+  const [sosConfirmPoint, setSosConfirmPoint] = useState<LatLng | null>(null);
+  const [sosSending, setSosSending] = useState(false);
+  const [sosResult, setSosResult] = useState<SosResult | null>(null);
+  const [nearbySosAlerts, setNearbySosAlerts] = useState<NearbySosAlert[]>([]);
+  const smsAutoOpenedRef = useRef(false);
+
   useEffect(() => {
     let active = true;
     async function syncWithBackend() {
@@ -265,6 +314,26 @@ export default function App() {
       window.clearInterval(interval);
     };
   }, []);
+
+  // Poll the backend for SOS alerts broadcast by other nearby users.
+  useEffect(() => {
+    let active = true;
+    async function loadNearbyAlerts() {
+      try {
+        const alerts = await fetchNearbySosAlerts(userLocation ?? DEFAULT_CENTER, 25000);
+        if (!active) return;
+        setNearbySosAlerts(alerts.filter((alert) => alert.clientId !== clientId));
+      } catch {
+        // Offline mode: previously seen alerts remain until the next successful poll.
+      }
+    }
+    void loadNearbyAlerts();
+    const interval = window.setInterval(loadNearbyAlerts, 12000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [userLocation, clientId]);
 
   useEffect(() => saveReports(reports), [reports]);
   useEffect(() => saveSosRequests(sosRequests), [sosRequests]);
@@ -604,6 +673,152 @@ export default function App() {
     setNotice('Tap the map to choose the SOS location.');
   }
 
+  /** First tap on the SOS dock button: ask for confirmation while GPS starts. */
+  function openQuickSos() {
+    setFilterOpen(false);
+    setMapMode('idle');
+    setSosResult(null);
+    smsAutoOpenedRef.current = false;
+    setSosConfirmPoint(userLocation);
+    setPanel('sos-confirm');
+
+    if (!navigator.geolocation) {
+      setNotice('This browser has no GPS. Use "Add details" to choose a point on the map.');
+      return;
+    }
+    setLocationBusy(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const point: LatLng = [position.coords.latitude, position.coords.longitude];
+        setUserLocation(point);
+        setSosConfirmPoint(point);
+        setLocationBusy(false);
+      },
+      () => {
+        setLocationBusy(false);
+        if (!userLocation) {
+          setNotice('GPS was unavailable. Use "Add details" to choose the SOS location on the map.');
+        }
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 10000 },
+    );
+  }
+
+  /** Second tap: broadcast the alert, create the tracking link, hand off the SMS. */
+  async function dispatchSos(
+    position: LatLng,
+    reason: string,
+    details: { voiceAttached?: boolean; pictureName?: string } = {},
+  ) {
+    setSosSending(true);
+    let shareInfo: Awaited<ReturnType<typeof triggerBackendSos>> | undefined;
+    try {
+      shareInfo = await triggerBackendSos(position, reason, {
+        radiusMeters: SOS_RADIUS_METERS,
+        clientId,
+      });
+    } catch (err) {
+      console.warn('Backend SOS broadcast failed:', err);
+    }
+
+    const sharePath = shareInfo?.shareUrl;
+    const shareUrl = sharePath ? `${window.location.origin}${sharePath}` : mapsLink(position);
+    const contactName = userPreferences?.emergencyContactName?.trim() || 'my emergency contact';
+    const contactPhone = userPreferences?.emergencyContactPhone?.trim() || '';
+    const message = [
+      'SAFEROUTE EMERGENCY ALERT',
+      reason.trim() ? `Situation: ${reason.trim()}` : null,
+      `I triggered an SOS at ${new Date().toLocaleString()}.`,
+      `Track my live location: ${shareUrl}`,
+      `Coordinates: ${position[0].toFixed(5)}, ${position[1].toFixed(5)}`,
+    ].filter(Boolean).join('\n');
+    const smsUrl = contactPhone ? buildSmsUrl(contactPhone, message) : undefined;
+
+    const request: SosRequest = {
+      id: createId(),
+      position,
+      createdAt: new Date().toISOString(),
+      reason: reason.trim() || undefined,
+      voiceAttached: details.voiceAttached ?? false,
+      pictureName: details.pictureName,
+      status: shareInfo?.alertId ? 'Emergency Active' : 'Saved locally — demo only',
+      journeyId: shareInfo?.journeyId,
+      shareToken: shareInfo?.shareToken,
+      shareUrl: sharePath,
+      alertId: shareInfo?.alertId,
+    };
+    setSosRequests((current) => [request, ...current]);
+    if (sharePath) setLastSosShareUrl(sharePath);
+    setUserLocation((current) => current ?? position);
+    setSosResult({
+      position,
+      reason: reason.trim() || undefined,
+      alertId: shareInfo?.alertId,
+      sharePath,
+      shareUrl,
+      smsUrl,
+      contactName: contactPhone ? contactName : undefined,
+      contactPhone: contactPhone || undefined,
+      online: Boolean(shareInfo?.alertId),
+    });
+    setPanel('sos-result');
+    setNotice(
+      shareInfo?.alertId
+        ? 'Emergency SOS shared with nearby SafeRoute users.'
+        : 'SOS saved locally — the backend is offline.',
+    );
+
+    if (smsUrl && !smsAutoOpenedRef.current) {
+      smsAutoOpenedRef.current = true;
+      openSmsApp(smsUrl);
+    }
+    setSosSending(false);
+  }
+
+  async function confirmQuickSos() {
+    const point = sosConfirmPoint ?? userLocation;
+    if (point) {
+      await dispatchSos(point, '');
+      return;
+    }
+    try {
+      const gps = await readGpsPoint();
+      setUserLocation(gps);
+      setSosConfirmPoint(gps);
+      await dispatchSos(gps, '');
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : 'Could not read your GPS location.');
+    }
+  }
+
+  async function resolveCurrentSos() {
+    const alertId = sosResult?.alertId;
+    if (!alertId) {
+      setNotice('This alert was only saved on this device.');
+      return;
+    }
+    try {
+      await resolveSosAlert(alertId, clientId);
+      setSosRequests((current) => current.map((request) => (
+        request.alertId === alertId ? { ...request, status: 'Resolved' } : request
+      )));
+      setNearbySosAlerts((current) => current.filter((alert) => alert.alertId !== alertId));
+      setNotice('SOS resolved. Location sharing has stopped.');
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : 'Could not stop sharing this alert.');
+    }
+  }
+
+  async function copyTrackingLink() {
+    if (!sosResult?.shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(sosResult.shareUrl);
+      setNotice('Tracking link copied to clipboard.');
+    } catch {
+      setNotice('Select the link in the box to copy it manually.');
+    }
+  }
+
   async function toggleVoiceRecording() {
     if (voiceRecording) {
       mediaRecorderRef.current?.stop();
@@ -650,33 +865,11 @@ export default function App() {
     if (voiceRecording) {
       mediaRecorderRef.current?.stop();
     }
-
-    let shareInfo: { journeyId?: string; shareUrl?: string } = {};
-    try {
-      shareInfo = await triggerBackendSos(sosPoint, sosReason);
-    } catch (err) {
-      console.warn('Backend SOS broadcast failed:', err);
-    }
-
-    const request: SosRequest = {
-      id: createId(),
-      position: sosPoint,
-      createdAt: new Date().toISOString(),
-      reason: sosReason.trim() || undefined,
+    smsAutoOpenedRef.current = false;
+    await dispatchSos(sosPoint, sosReason, {
       voiceAttached: voiceAttached || voiceRecording,
       pictureName: sosPhoto?.name,
-      status: shareInfo.journeyId ? 'Emergency Active' : 'Saved locally — demo only',
-      journeyId: shareInfo.journeyId,
-      shareUrl: shareInfo.shareUrl,
-    };
-    setSosRequests((current) => [request, ...current]);
-    setPanel(null);
-    if (shareInfo.shareUrl) {
-      setLastSosShareUrl(shareInfo.shareUrl);
-      setNotice('Emergency SOS broadcast to SafeRoute backend! Active tracking link created.');
-    } else {
-      setNotice('SOS saved in this browser demo (offline mode).');
-    }
+    });
   }
 
   function clearRoute() {
@@ -688,6 +881,9 @@ export default function App() {
     setMapMode('idle');
     setNotice('Route preview cleared.');
   }
+
+  const emergencyContactName = userPreferences?.emergencyContactName?.trim() || 'my emergency contact';
+  const emergencyContactPhone = userPreferences?.emergencyContactPhone?.trim();
 
   const modeMessage = mapMode === 'report'
     ? 'Tap anywhere on the map to place the report marker'
@@ -778,15 +974,52 @@ export default function App() {
           >
             <Popup>
               <div className="map-popup">
-                <div className="popup-kicker popup-danger">Local SOS demo marker</div>
+                <div className="popup-kicker popup-danger">
+                  {request.status === 'Resolved' ? 'Resolved SOS' : 'Your SOS alert'}
+                </div>
                 <strong>Emergency request</strong>
                 <p>{request.reason || 'No reason was added.'}</p>
                 <small>{formatDate(request.createdAt)}</small>
-                <small className="popup-coordinate">No responder was notified.</small>
+                <small className="popup-coordinate">
+                  {request.alertId
+                    ? 'Location shared with nearby SafeRoute users.'
+                    : 'Saved on this device (offline demo).'}
+                </small>
               </div>
             </Popup>
           </CircleMarker>
         ))}
+
+        {showSosMarkers && nearbySosAlerts.map((alert) => {
+          const trackingUrl = alert.shareUrl
+            ? `${window.location.origin}${alert.shareUrl}`
+            : alert.shareToken
+              ? `${window.location.origin}/api/v1/shared/journeys/${alert.shareToken}`
+              : null;
+          return (
+            <CircleMarker
+              key={alert.alertId}
+              center={alert.position}
+              radius={12}
+              pathOptions={{ color: '#ffffff', weight: 3, fillColor: '#dc2626', fillOpacity: 0.92, className: 'sos-alert-marker' }}
+            >
+              <Popup>
+                <div className="map-popup">
+                  <div className="popup-kicker popup-danger">Emergency nearby · Live SOS</div>
+                  <strong>Someone needs help</strong>
+                  <p>{alert.reason || 'An emergency SOS was triggered at this location.'}</p>
+                  <small>{formatDate(alert.createdAt)} · {formatDistance(alert.distanceMeters)} away</small>
+                  <small className="popup-coordinate">{formatCoordinate(alert.position)}</small>
+                  {trackingUrl && (
+                    <p className="popup-haven-phone">
+                      <a href={trackingUrl} target="_blank" rel="noreferrer">Open live location →</a>
+                    </p>
+                  )}
+                </div>
+              </Popup>
+            </CircleMarker>
+          );
+        })}
 
         {userLocation && (
           <>
@@ -1064,12 +1297,117 @@ export default function App() {
             <span>Report</span>
           </button>
           <span className="dock-separator" />
-          <button className="dock-action dock-sos" type="button" onClick={openSos}>
+          <button className="dock-action dock-sos" type="button" onClick={openQuickSos}>
             <span className="dock-icon"><ShieldAlert size={19} /></span>
             <span>SOS</span>
           </button>
         </nav>
       </div>
+
+      {panel === 'sos-confirm' && (
+        <div className="panel-scrim" onMouseDown={(event) => { if (event.target === event.currentTarget && !sosSending) setPanel(null); }}>
+          <section className="action-panel sos-panel sos-confirm-panel" aria-labelledby="sos-confirm-title">
+            <div className="action-panel-heading">
+              <span className="panel-icon sos-icon"><ShieldAlert size={20} /></span>
+              <div><strong id="sos-confirm-title">Send emergency SOS?</strong><small>Confirm and help is alerted immediately</small></div>
+              <button className="close-panel" type="button" aria-label="Cancel SOS" onClick={() => setPanel(null)}><X size={18} /></button>
+            </div>
+
+            <div className={`location-summary ${sosConfirmPoint ? 'location-ready' : 'location-missing'}`}>
+              <LocateFixed size={17} />
+              <div>
+                <strong>{sosConfirmPoint ? 'Your GPS location is ready' : locationBusy ? 'Getting your GPS location…' : 'Location unavailable'}</strong>
+                <small>{formatCoordinate(sosConfirmPoint)}</small>
+              </div>
+              <span className="location-status">
+                {locationBusy && !sosConfirmPoint ? <span className="spinner" /> : sosConfirmPoint ? <Check size={16} /> : <AlertTriangle size={16} />}
+              </span>
+            </div>
+
+            <div className="sos-action-list">
+              <div className="sos-action-item">
+                <Navigation size={16} />
+                <span>
+                  <strong>Share my live location</strong>
+                  <small>Nearby SafeRoute users within {formatDistance(SOS_RADIUS_METERS)} will see an active SOS alert on their map for 3 hours.</small>
+                </span>
+              </div>
+              <div className="sos-action-item">
+                <MessageCircle size={16} />
+                <span>
+                  <strong>{emergencyContactPhone ? `Open SMS to ${emergencyContactName}` : 'No emergency contact saved'}</strong>
+                  <small>
+                    {emergencyContactPhone
+                      ? `${emergencyContactPhone} — a ready-to-send message will open in your SMS app.`
+                      : 'You can still send the SOS; add a contact later in onboarding.'}
+                  </small>
+                </span>
+              </div>
+            </div>
+
+            <p className="sos-demo-warning"><AlertTriangle size={15} /><span>Only confirm if you are in danger. A false alert can put responders and neighbours at risk.</span></p>
+
+            <button
+              className="sos-submit-button"
+              type="button"
+              disabled={!sosConfirmPoint || sosSending}
+              onClick={() => void confirmQuickSos()}
+            >
+              {sosSending ? <span className="spinner" /> : <ShieldAlert size={17} />}
+              {sosSending ? 'Sending emergency alert…' : 'Yes, send SOS now'}
+            </button>
+            <button className="secondary-button sos-details-link" type="button" disabled={sosSending} onClick={openSos}>
+              Add a reason, voice note or picture instead
+            </button>
+          </section>
+        </div>
+      )}
+
+      {panel === 'sos-result' && sosResult && (
+        <div className="panel-scrim" onMouseDown={(event) => { if (event.target === event.currentTarget) setPanel(null); }}>
+          <section className="action-panel sos-panel sos-result-panel" aria-labelledby="sos-result-title">
+            <div className="action-panel-heading">
+              <span className="panel-icon result-icon"><Check size={20} /></span>
+              <div><strong id="sos-result-title">Emergency alert sent</strong><small>{sosResult.online ? 'Nearby users can see your SOS' : 'Saved locally — backend offline'}</small></div>
+              <button className="close-panel" type="button" aria-label="Close SOS result" onClick={() => setPanel(null)}><X size={18} /></button>
+            </div>
+
+            {sosResult.reason && <p className="sos-result-reason">“{sosResult.reason}”</p>}
+
+            <div className="sos-result-checklist">
+              <div><span className="result-check"><Check size={13} /></span><span>Location shared with SafeRoute users nearby</span></div>
+              <div><span className="result-check"><Check size={13} /></span><span>{sosResult.smsUrl ? `SMS opened for ${sosResult.contactName}` : 'No emergency contact number was saved'}</span></div>
+              {sosResult.shareUrl && <div><span className="result-check"><Check size={13} /></span><span>Live tracking link created</span></div>}
+            </div>
+
+            {sosResult.shareUrl && (
+              <div className="share-link-banner">
+                <strong>{sosResult.sharePath ? 'Live tracking link' : 'Location link'}</strong>
+                <a href={sosResult.shareUrl} target="_blank" rel="noreferrer">{sosResult.shareUrl}</a>
+                <button className="secondary-button" type="button" onClick={() => void copyTrackingLink()}><Copy size={14} /> Copy link</button>
+              </div>
+            )}
+
+            {sosResult.smsUrl && (
+              <a className="sos-sms-direct-btn sos-result-sms-btn" href={sosResult.smsUrl}>
+                <MessageCircle size={14} />
+                <span>Open SMS app again</span>
+              </a>
+            )}
+
+            <p className="sos-result-note">
+              In your SMS app, press <strong>Send</strong> to notify {sosResult.contactName || 'your emergency contact'}. They can then open the tracking link.
+            </p>
+
+            {sosResult.alertId && (
+              <button className="secondary-button resolve-sos-btn" type="button" onClick={() => void resolveCurrentSos()}>
+                <Check size={14} /> I'm safe — stop sharing my location
+              </button>
+            )}
+            <button className="primary-button" type="button" onClick={() => setPanel(null)}>Done</button>
+          </section>
+        </div>
+      )}
 
       {panel === 'report' && (
         <div className="panel-scrim" onMouseDown={(event) => { if (event.target === event.currentTarget) setPanel(null); }}>
@@ -1134,7 +1472,7 @@ export default function App() {
                   </span>
                 </div>
               )}
-              <div className="sos-demo-warning"><AlertTriangle size={15} /><span>{backendOnline ? 'Emergency SOS creates an active tracked journey and alerts SafeRoute dispatch.' : 'Offline mode: SOS request will be stored locally.'}</span></div>
+              <div className="sos-demo-warning"><AlertTriangle size={15} /><span>{backendOnline ? 'Emergency SOS creates a live tracking link and alerts SafeRoute users nearby.' : 'Offline mode: SOS request will be stored locally.'}</span></div>
               <button className="sos-submit-button" type="submit" disabled={!sosPoint}><ShieldAlert size={17} /> Send SOS emergency alert</button>
               {lastSosShareUrl && (
                 <div className="share-link-banner">

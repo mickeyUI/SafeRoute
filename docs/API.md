@@ -137,6 +137,32 @@ Categories: `police`, `hospital`, `transit`, `shop`, `friend`, `other`.
 
 Invalid transitions return `409 invalid_state`.
 
+## Emergency SOS
+
+| Method | Path | Auth | Description |
+| --- | --- | --- | --- |
+| POST | `/sos/alerts` | optional | Broadcast an active SOS location to nearby clients (201) |
+| GET | `/sos/alerts/nearby` | no | Active alerts visible near a latitude/longitude |
+| PATCH | `/sos/alerts/{alert_id}/resolve` | optional | Stop sharing an alert; requires the creator's `client_id` or user |
+
+Create body:
+
+```json
+{
+  "latitude": 9.03,
+  "longitude": 38.74,
+  "radius_meters": 2000,
+  "reason": "Harassed on the way home",
+  "client_id": "device-abc",
+  "share_token": "share_...",
+  "valid_hours": 3
+}
+```
+
+Alerts expire after `valid_hours` and are listed only to clients searching inside
+the broadcast radius. The web client opens the device SMS app with a prefilled
+tracking link; browsers cannot send SMS silently without an SMS gateway.
+
 ## Contacts
 
 | Method | Path | Auth | Description |

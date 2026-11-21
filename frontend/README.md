@@ -26,7 +26,7 @@ npm run preview
 - **Route availability:** The public routing service may return fewer than three distinct paths. Unavailable choices are shown as unavailable rather than inventing duplicate routes. If no route has greater saved-report exposure than the others, the higher-risk option stays unavailable.
 - **Route exposure estimate:** Routes are compared against reports saved in this browser, using category, distance from the path, and report age as rough weights. This is not a crime map or a validated safety model. Reports can be inaccurate, incomplete, duplicated, or unverified. The words “safest” and “higher reported risk” describe only relative local report signals, not actual safety.
 - **Report:** Press Report, tap the map to pin the location, choose a category, and optionally add a description or image. New reports appear as map markers and remain marked **Pending review**.
-- **SOS:** Choose GPS or a map location. A text reason, voice recording, and picture are optional. This demo saves a local request only and does not contact emergency services or responders.
+- **SOS:** One tap opens a confirmation prompt and starts GPS. Confirming immediately broadcasts the location to nearby SafeRoute users, creates a 3-hour live tracking link, and opens a prefilled SMS to the saved emergency contact (the user presses Send in their SMS app). The user can stop sharing with **I'm safe**. For a text reason, voice recording, or picture, choose **Add a reason, voice note or picture instead** before confirming. This demo does not contact emergency services.
 - **Filters:** Toggle report categories and SOS markers without leaving the map.
 - **Themes:** Switch between five interface themes: Rose, Midnight, Ocean, Forest, and Lavender. The selected theme is saved in this browser. The underlying OpenStreetMap tile style remains the same.
 
@@ -37,7 +37,7 @@ The frontend is now fully integrated with the SafeRoute FastAPI backend:
 - **Safety Scoring & Route Comparison:** Route comparison calls `POST /api/v1/routes/compare`. The backend Safety Engine ranks routes using pedestrian corridors, verified safe havens, and community incident reports with day/night lighting models. If the backend is unreachable, the frontend gracefully falls back to OSRM + local scoring.
 - **Verified Safe Havens:** Verified safe havens (police stations, 24/7 hospitals, verified shelters) are fetched dynamically via `GET /api/v1/locations/safe` and rendered on the map with custom green markers, popup details, contact numbers, and filter toggles.
 - **Incident Reports:** Community incident reports synchronize with `GET /api/v1/reports/nearby` and new reports are submitted to `POST /api/v1/reports`.
-- **SOS Emergency Alerting:** SOS alerts notify `POST /api/v1/reports` and initiate tracked journeys via `POST /api/v1/journeys`, generating a live shareable tracking token.
+- **SOS Emergency Alerting:** SOS alerts submit `POST /api/v1/reports`, initiate tracked journeys via `POST /api/v1/journeys`, generate a live shareable tracking token, and publish `POST /api/v1/sos/alerts`. Other clients poll `GET /api/v1/sos/alerts/nearby` and see active alerts as map markers. The app opens the device SMS app with the tracking link; browsers cannot send SMS without user confirmation unless an SMS gateway is added.
 - **Backend Health & Offline Mode:** The header indicates live backend connection status (`SafeRoute Engine Connected`). When offline, the app operates in offline local storage mode.
 
 

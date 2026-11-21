@@ -188,6 +188,27 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .sos-demo-warning svg { flex: 0 0 auto; margin-top: 1px; color: #cb4961; }
 .sos-demo-warning strong { color: #a83c51; }
 .required-location-note { margin: -3px 0 0; color: #b18153; text-align: center; font-size: 9px; }
+
+/* ─── One-tap SOS: confirmation, result, nearby alerts ─── */
+.sos-confirm-panel .sos-action-list,
+.sos-result-panel .sos-result-checklist { display: grid; gap: 8px; }
+.sos-action-item { display: flex; align-items: flex-start; gap: 10px; padding: 10px 11px; border: 1px solid #f3e2e8; border-radius: 11px; background: #fffafd; color: #c64161; }
+.sos-action-item > span { display: grid; gap: 3px; }
+.sos-action-item strong { color: #493b46; font-size: 11px; }
+.sos-action-item small { color: #8d808a; font-size: 9px; line-height: 1.45; }
+.sos-action-item svg { flex: 0 0 auto; margin-top: 1px; }
+.sos-details-link { width: 100%; }
+.result-icon { color: #15803d; background: #ecfdf5; }
+.sos-result-reason { margin: 0; padding: 9px 11px; border-left: 3px solid #e25470; border-radius: 6px; background: #fff7f8; color: #7c4d5c; font-size: 11px; line-height: 1.5; }
+.sos-result-checklist > div { display: flex; align-items: center; gap: 8px; color: #5f5360; font-size: 10px; line-height: 1.4; }
+.result-check { display: grid; place-items: center; width: 19px; height: 19px; flex: 0 0 auto; border-radius: 50%; background: #e7f8ee; color: #17845a; }
+.share-link-banner .secondary-button { width: fit-content; }
+.sos-result-sms-btn { width: 100%; justify-content: center; text-decoration: none; }
+.sos-result-note { margin: 0; color: #8b7e89; font-size: 9px; line-height: 1.5; }
+.resolve-sos-btn { width: 100%; border-color: #f2d8dc; color: #b84057; }
+.resolve-sos-btn:hover:not(:disabled) { border-color: #e6afbb; background: #fff5f6; color: #9c2e46; }
+.sos-alert-marker { animation: sos-alert-pulse 1.8s ease-in-out infinite; }
+@keyframes sos-alert-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
 .toast-message { position: absolute; z-index: 1000; left: 50%; bottom: 126px; transform: translateX(-50%); display: flex; align-items: center; gap: 9px; width: max-content; max-width: min(92vw, 590px); padding: 11px 13px; border: 1px solid #f0e1e9; border-radius: 12px; background: rgba(255,255,255,.98); box-shadow: 0 10px 30px rgba(42,26,37,.14); color: #6d5d6a; font-size: 10px; line-height: 1.4; }
 .toast-mark { display: grid; place-items: center; width: 21px; height: 21px; flex: 0 0 auto; border-radius: 7px; background: #eef9f3; color: #38966f; }
 .toast-message > button { flex: 0 0 auto; display: grid; place-items: center; border: 0; background: transparent; color: #a499a3; }
