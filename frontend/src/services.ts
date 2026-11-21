@@ -385,6 +385,76 @@ export interface RouteChoice {
   route: RouteCandidate | null;
 }
 
+function haversineM(c1: LatLng, c2: LatLng): number {
+  const [lat1, lon1] = c1;
+  const [lat2, lon2] = c2;
+  const R = 6371000.0;
+  const phi1 = (lat1 * Math.PI) / 180;
+  const phi2 = (lat2 * Math.PI) / 180;
+  const dphi = ((lat2 - lat1) * Math.PI) / 180;
+  const dlam = ((lon2 - lon1) * Math.PI) / 180;
+  const a = Math.sin(dphi / 2) ** 2 + Math.cos(phi1) * Math.cos(phi2) * Math.sin(dlam / 2) ** 2;
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+export function removeDeadEndSpurs(points: LatLng[], junctionThresholdM = 45.0, minSpurPoints = 3): LatLng[] {
+  if (points.length < minSpurPoints + 2) return points;
+
+  let cleaned = [...points];
+  let changed = true;
+  let passes = 0;
+  const maxPasses = 10;
+
+  while (changed && passes < maxPasses) {
+    passes += 1;
+    changed = false;
+    const n = cleaned.length;
+    let bestI = -1;
+    let bestJ = -1;
+    let maxSpurLen = 0;
+
+    for (let i = 0; i < n - minSpurPoints; i++) {
+      for (let j = i + minSpurPoints; j < n; j++) {
+        const distDirect = haversineM(cleaned[i], cleaned[j]);
+        if (distDirect <= junctionThresholdM) {
+          let pathDist = 0;
+          for (let k = i; k < j; k++) {
+            pathDist += haversineM(cleaned[k], cleaned[k + 1]);
+          }
+
+          if (pathDist > Math.max(40.0, distDirect * 2.5)) {
+            let maxApexDist = 0;
+            let apexIdx = i;
+            for (let k = i; k <= j; k++) {
+              const dK = haversineM(cleaned[i], cleaned[k]);
+              if (dK > maxApexDist) {
+                maxApexDist = dK;
+                apexIdx = k;
+              }
+            }
+
+            if (maxApexDist > Math.max(20.0, distDirect * 1.5) && apexIdx > i && apexIdx < j) {
+              const spurLen = j - i;
+              if (spurLen > maxSpurLen) {
+                maxSpurLen = spurLen;
+                bestI = i;
+                bestJ = j;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (bestI !== -1 && bestJ !== -1) {
+      cleaned = [...cleaned.slice(0, bestI + 1), ...cleaned.slice(bestJ + 1)];
+      changed = true;
+    }
+  }
+
+  return cleaned;
+}
+
 function interpolateSmoothCurve(points: LatLng[]): LatLng[] {
   if (points.length < 3) return points;
   const [start, mid, end] = points;
@@ -414,7 +484,8 @@ export async function snapToStreetGeometry(points: LatLng[]): Promise<LatLng[]> 
       if (data.code === 'Ok' && data.routes?.length) {
         const coords = data.routes[0].geometry.coordinates;
         if (coords?.length >= 2) {
-          return coords.map(([lon, lat]: [number, number]) => [lat, lon] as LatLng);
+          const latLngs = coords.map(([lon, lat]: [number, number]) => [lat, lon] as LatLng);
+          return removeDeadEndSpurs(latLngs);
         }
       }
     }
@@ -422,7 +493,7 @@ export async function snapToStreetGeometry(points: LatLng[]): Promise<LatLng[]> 
     // Offline or network error
   }
 
-  return interpolateSmoothCurve(points);
+  return removeDeadEndSpurs(interpolateSmoothCurve(points));
 }
 
 export async function compareRoutesWithBackend(
@@ -483,7 +554,7 @@ export async function compareRoutesWithBackend(
     };
   });
 
-  // Ensure every route candidate follows street curves even if backend returned a stub geometry
+  // Ensure every route candidate follows street curves and is free of dead-end spurs
   await Promise.all(
     candidates.map(async (candidate) => {
       if (candidate.coordinates.length <= 4) {
@@ -491,6 +562,15 @@ export async function compareRoutesWithBackend(
         if (streetCoords.length > candidate.coordinates.length) {
           candidate.coordinates = streetCoords;
         }
+      }
+      candidate.coordinates = removeDeadEndSpurs(candidate.coordinates);
+      if (candidate.coordinates.length >= 2) {
+        let dist = 0;
+        for (let i = 0; i < candidate.coordinates.length - 1; i++) {
+          dist += haversineM(candidate.coordinates[i], candidate.coordinates[i + 1]);
+        }
+        candidate.distanceMeters = Math.round(dist);
+        candidate.durationSeconds = Math.round(dist / 1.25);
       }
     }),
   );
@@ -562,10 +642,43 @@ export async function getDrivingRoutes(start: LatLng, end: LatLng): Promise<Rout
   const data = (await response.json()) as OsrmRouteResponse;
   if (data.code !== 'Ok' || !data.routes?.length) throw new Error('No driving route was found between those points.');
 
-  const rawRoutes = [...(data.routes ?? [])];
+  interface ProcessedRoute {
+    coordinates: LatLng[];
+    distance: number;
+    duration: number;
+    steps: RouteStep[];
+  }
+
+  const processedRoutes: ProcessedRoute[] = [];
+
+  for (const [rIdx, r] of (data.routes ?? []).entries()) {
+    const rawCoords = r.geometry.coordinates.map(([lng, lat]) => [lat, lng] as LatLng);
+    const cleanedCoords = removeDeadEndSpurs(rawCoords);
+    if (cleanedCoords.length < 2) continue;
+
+    let dist = 0;
+    for (let i = 0; i < cleanedCoords.length - 1; i++) {
+      dist += haversineM(cleanedCoords[i], cleanedCoords[i + 1]);
+    }
+    const distM = Math.round(dist);
+
+    if (!processedRoutes.some((p) => Math.abs(p.distance - distM) < 35)) {
+      processedRoutes.push({
+        coordinates: cleanedCoords,
+        distance: distM,
+        duration: Math.round(distM / 1.25),
+        steps: (r.legs ?? []).flatMap((leg) => leg.steps ?? []).map((step, stepIndex) => ({
+          id: `step-${rIdx}-${stepIndex}`,
+          instruction: stepInstruction(step),
+          distanceMeters: step.distance,
+          durationSeconds: step.duration,
+        })),
+      });
+    }
+  }
 
   // If OSRM returned fewer than 3 routes, fetch lateral street corridor alternatives
-  if (rawRoutes.length < 3) {
+  if (processedRoutes.length < 3) {
     const dLat = end[0] - start[0];
     const dLng = end[1] - start[1];
     const distDeg = Math.hypot(dLat, dLng) || 0.0001;
@@ -573,11 +686,21 @@ export async function getDrivingRoutes(start: LatLng, end: LatLng): Promise<Rout
     const pLng = dLat / distDeg;
     const latOffset = Math.max(0.0011, Math.min(0.0055, distDeg * 0.16));
 
-    const candidateOffsets = [latOffset, -latOffset, latOffset * 1.8, -latOffset * 1.8];
-    for (const offset of candidateOffsets) {
-      if (rawRoutes.length >= 3) break;
-      const viaLat = Number((start[0] + dLat * 0.5 + pLat * offset).toFixed(6));
-      const viaLng = Number((start[1] + dLng * 0.5 + pLng * offset).toFixed(6));
+    const candidateSpecs = [
+      { frac: 0.5, off: latOffset },
+      { frac: 0.5, off: -latOffset },
+      { frac: 0.5, off: latOffset * 1.8 },
+      { frac: 0.5, off: -latOffset * 1.8 },
+      { frac: 0.35, off: latOffset * 0.8 },
+      { frac: 0.35, off: -latOffset * 0.8 },
+      { frac: 0.65, off: latOffset * 0.8 },
+      { frac: 0.65, off: -latOffset * 0.8 },
+    ];
+
+    for (const spec of candidateSpecs) {
+      if (processedRoutes.length >= 3) break;
+      const viaLat = Number((start[0] + dLat * spec.frac + pLat * spec.off).toFixed(6));
+      const viaLng = Number((start[1] + dLng * spec.frac + pLng * spec.off).toFixed(6));
       const viaCoords = `${start[1]},${start[0]};${viaLng},${viaLat};${end[1]},${end[0]}`;
       try {
         const altRes = await fetch(
@@ -588,9 +711,29 @@ export async function getDrivingRoutes(start: LatLng, end: LatLng): Promise<Rout
           const altData = (await altRes.json()) as OsrmRouteResponse;
           if (altData.code === 'Ok' && altData.routes?.length) {
             const altRoute = altData.routes[0];
-            const isDistinct = !rawRoutes.some((r) => Math.abs(r.distance - altRoute.distance) < 25);
-            if (isDistinct && altRoute.geometry.coordinates.length >= 2) {
-              rawRoutes.push(altRoute);
+            const rawCoords = altRoute.geometry.coordinates.map(([lng, lat]) => [lat, lng] as LatLng);
+            const cleanedCoords = removeDeadEndSpurs(rawCoords);
+            if (cleanedCoords.length >= 2) {
+              let dist = 0;
+              for (let i = 0; i < cleanedCoords.length - 1; i++) {
+                dist += haversineM(cleanedCoords[i], cleanedCoords[i + 1]);
+              }
+              const distM = Math.round(dist);
+              // Reject candidate if it was a dead-end spur that collapsed back to an existing route
+              const isDistinct = !processedRoutes.some((p) => Math.abs(p.distance - distM) < 35);
+              if (isDistinct) {
+                processedRoutes.push({
+                  coordinates: cleanedCoords,
+                  distance: distM,
+                  duration: Math.round(distM / 1.25),
+                  steps: (altRoute.legs ?? []).flatMap((leg) => leg.steps ?? []).map((step, stepIndex) => ({
+                    id: `step-alt-${processedRoutes.length}-${stepIndex}`,
+                    instruction: stepInstruction(step),
+                    distanceMeters: step.distance,
+                    durationSeconds: step.duration,
+                  })),
+                });
+              }
             }
           }
         }
@@ -600,17 +743,12 @@ export async function getDrivingRoutes(start: LatLng, end: LatLng): Promise<Rout
     }
   }
 
-  return rawRoutes.map((route, index) => ({
+  return processedRoutes.map((route, index) => ({
     id: `route-${index}`,
-    coordinates: route.geometry.coordinates.map(([lng, lat]) => [lat, lng] as LatLng),
+    coordinates: route.coordinates,
     distanceMeters: route.distance,
     durationSeconds: route.duration,
-    steps: (route.legs ?? []).flatMap((leg) => leg.steps ?? []).map((step, stepIndex) => ({
-      id: `step-${index}-${stepIndex}`,
-      instruction: stepInstruction(step),
-      distanceMeters: step.distance,
-      durationSeconds: step.duration,
-    })),
+    steps: route.steps,
     nearbyReportCount: 0,
     reportedRiskScore: 0,
   }));

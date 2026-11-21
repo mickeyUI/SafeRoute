@@ -5,6 +5,7 @@ from app.core.config import settings
 from app.schemas.route import Coordinate, GeoJSONLineString
 from app.models.route import TravelMode
 from app.services.routing import get_routing_provider
+from app.services.routing.osrm import remove_dead_end_spurs, haversine_m
 
 class RoutingService:
     """
@@ -133,16 +134,24 @@ class RoutingService:
         ]
 
         routes: List[Dict[str, Any]] = []
+        seen_distances: set[int] = set()
         try:
             async with httpx.AsyncClient(timeout=float(settings.routing_timeout_seconds)) as client:
                 for c_id, coords_str, summary in corridor_requests:
                     raw_routes = await self._fetch_osrm_single(client, coords_str, profile="foot")
                     if raw_routes:
                         r = raw_routes[0]
-                        pts = r.get("geometry", {}).get("coordinates", [])
-                        if len(pts) >= 2:
-                            dist = float(r.get("distance", 0.0))
-                            dur = float(r.get("duration", dist / self.WALKING_SPEED_MPS))
+                        raw_pts = r.get("geometry", {}).get("coordinates", [])
+                        if len(raw_pts) >= 2:
+                            pts = remove_dead_end_spurs([(float(p[0]), float(p[1])) for p in raw_pts])
+                            if len(pts) < 2:
+                                continue
+                            dist = float(sum(haversine_m(pts[k], pts[k + 1]) for k in range(len(pts) - 1)))
+                            dist_round = int(round(dist))
+                            if any(abs(dist_round - d) < 35 for d in seen_distances):
+                                continue
+                            seen_distances.add(dist_round)
+                            dur = float(dist / self.WALKING_SPEED_MPS)
                             routes.append({
                                 "route_id": f"osrm_{c_id}",
                                 "summary": summary,
