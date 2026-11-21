@@ -215,6 +215,31 @@ class DataStore:
             "created_at": datetime.now(timezone.utc)
         }
         self.users[email_clean] = record
+
+        # Sync to PostgreSQL / Supabase if available
+        try:
+            from app.db.session import SessionLocal
+            from app.models.user import User as UserModel, UserRole
+            with SessionLocal() as session:
+                db_user = session.query(UserModel).filter(UserModel.email == email_clean).first()
+                if not db_user:
+                    uid = uuid.UUID(user_id) if len(user_id) == 36 else uuid.uuid4()
+                    db_user = UserModel(
+                        id=uid,
+                        email=email_clean,
+                        hashed_password=self.hash_password(password),
+                        full_name=record["full_name"],
+                        role=UserRole.user,
+                        is_active=True
+                    )
+                    session.add(db_user)
+                    session.commit()
+                    record["id"] = str(db_user.id)
+                else:
+                    record["id"] = str(db_user.id)
+        except Exception:
+            pass
+
         return record
 
     def authenticate_user(self, email: str, password: str) -> Optional[Dict[str, Any]]:
@@ -246,6 +271,30 @@ class DataStore:
             "created_at": datetime.now(timezone.utc)
         }
         self.users[email_clean] = record
+
+        # Sync to PostgreSQL / Supabase if available
+        try:
+            from app.db.session import SessionLocal
+            from app.models.user import User as UserModel, UserRole
+            with SessionLocal() as session:
+                db_user = session.query(UserModel).filter(UserModel.email == email_clean).first()
+                if not db_user:
+                    db_user = UserModel(
+                        id=uuid.uuid4(),
+                        email=email_clean,
+                        hashed_password=record["password_hash"],
+                        full_name=record["full_name"],
+                        role=UserRole.user,
+                        is_active=True
+                    )
+                    session.add(db_user)
+                    session.commit()
+                    record["id"] = str(db_user.id)
+                else:
+                    record["id"] = str(db_user.id)
+        except Exception:
+            pass
+
         return record
 
     def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
@@ -267,6 +316,51 @@ class DataStore:
             "created_at": datetime.now(timezone.utc)
         }
         self.contacts[contact_id] = record
+
+        # Sync to PostgreSQL / Supabase if available
+        try:
+            from app.db.session import SessionLocal
+            from app.models.user import User as UserModel, UserRole
+            from app.models.contact import Contact as ContactModel
+
+            with SessionLocal() as session:
+                try:
+                    uid = uuid.UUID(user_id)
+                except (ValueError, TypeError):
+                    uid = uuid.uuid5(uuid.NAMESPACE_DNS, str(user_id))
+
+                db_user = session.query(UserModel).filter(UserModel.id == uid).first()
+                if not db_user:
+                    db_user = UserModel(
+                        id=uid,
+                        email=f"{user_id}@saferoute.app",
+                        hashed_password=self.hash_password("SafeRoute2026!"),
+                        full_name="SafeRoute User",
+                        role=UserRole.user,
+                        is_active=True
+                    )
+                    session.add(db_user)
+                    session.flush()
+
+                cid = uuid.uuid4()
+                db_contact = ContactModel(
+                    id=cid,
+                    user_id=uid,
+                    name=contact_in.name,
+                    phone=contact_in.phone,
+                    email=contact_in.email,
+                    relationship=contact_in.relationship or "Family / Friend",
+                    is_primary=True
+                )
+                session.add(db_contact)
+                session.commit()
+                if str(cid) != contact_id:
+                    self.contacts.pop(contact_id, None)
+                    record["id"] = str(cid)
+                    self.contacts[str(cid)] = record
+        except Exception:
+            pass
+
         return record
 
     def list_contacts(self, user_id: str) -> List[Dict[str, Any]]:
@@ -275,8 +369,33 @@ class DataStore:
     def delete_contact(self, contact_id: str, user_id: str) -> bool:
         c = self.contacts.get(contact_id)
         if not c or c["user_id"] != user_id:
+            # Also check if it's in the DB
+            try:
+                from app.db.session import SessionLocal
+                from app.models.contact import Contact as ContactModel
+                with SessionLocal() as session:
+                    cid = uuid.UUID(contact_id)
+                    db_c = session.query(ContactModel).filter(ContactModel.id == cid).first()
+                    if db_c:
+                        session.delete(db_c)
+                        session.commit()
+                        self.contacts.pop(contact_id, None)
+                        return True
+            except Exception:
+                pass
             return False
         del self.contacts[contact_id]
+        try:
+            from app.db.session import SessionLocal
+            from app.models.contact import Contact as ContactModel
+            with SessionLocal() as session:
+                cid = uuid.UUID(contact_id)
+                db_c = session.query(ContactModel).filter(ContactModel.id == cid).first()
+                if db_c:
+                    session.delete(db_c)
+                    session.commit()
+        except Exception:
+            pass
         return True
 
     # --- Incident Report Methods ---

@@ -36,6 +36,7 @@ import {
   type UserPreferences,
   type UserRead,
 } from './auth';
+import { checkBackendHealth, createBackendContact } from './services';
 
 // ─── Google Brand Icon ────────────────────────────────────────────────────────
 
@@ -1085,18 +1086,19 @@ export default function Onboarding({ onComplete, onSkip }: OnboardingProps) {
 
   // Check backend availability
   useEffect(() => {
+    let active = true;
     const timer = window.setTimeout(async () => {
       try {
-        const res = await fetch('/api/v1/health').catch(() => null);
-        if (!res || !res.ok) {
-          const res2 = await fetch('http://127.0.0.1:8000/api/v1/health').catch(() => null);
-          setBackendDown(!res2 || !res2.ok);
-        }
+        const health = await checkBackendHealth();
+        if (active) setBackendDown(!health.online);
       } catch {
-        setBackendDown(true);
+        if (active) setBackendDown(true);
       }
     }, 900);
-    return () => window.clearTimeout(timer);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
   }, []);
 
   function handleAccountCreated(user: UserRead, token: string) {
@@ -1136,10 +1138,24 @@ export default function Onboarding({ onComplete, onSkip }: OnboardingProps) {
     setScreen('emergency-contact');
   }
 
-  function handleEmergencyContactSaved(contact: { emergencyContactName: string; emergencyContactPhone: string }) {
+  async function handleEmergencyContactSaved(contact: { emergencyContactName: string; emergencyContactPhone: string }) {
     const merged: UserPreferences = { ...userPrefs, ...contact };
     setUserPrefs(merged);
     savePreferences(merged);
+
+    // Send contact to backend database if provided
+    if (contact.emergencyContactName && contact.emergencyContactPhone) {
+      try {
+        await createBackendContact({
+          name: contact.emergencyContactName,
+          phone: contact.emergencyContactPhone,
+          relationship: 'Emergency Contact',
+        });
+      } catch (err) {
+        console.warn('Failed to sync contact to backend API:', err);
+      }
+    }
+
     setScreen('success');
   }
 

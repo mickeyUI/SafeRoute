@@ -3,7 +3,8 @@
  * Handles register, login, token storage, and user profile validation.
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+const DEFAULT_API_BASE_URL = 'https://saferoute-ezbz.onrender.com/api/v1';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE_URL;
 const TOKEN_KEY = 'saferoute-auth-token';
 const USER_KEY = 'saferoute-auth-user';
 const PREFS_KEY = 'saferoute-user-preferences';
@@ -105,9 +106,21 @@ async function authFetch<T>(
   try {
     return await tryFetch(API_BASE_URL);
   } catch (err) {
+    // Fallback to deployed Render backend if not already targeted
+    if (!API_BASE_URL.includes('onrender.com')) {
+      try {
+        return await tryFetch('https://saferoute-ezbz.onrender.com/api/v1');
+      } catch {
+        // continue to next fallback
+      }
+    }
     // Fallback to direct localhost when proxy is unavailable
-    if (!API_BASE_URL.startsWith('http')) {
-      return await tryFetch('http://127.0.0.1:8000/api/v1');
+    if (!API_BASE_URL.includes('127.0.0.1') && !API_BASE_URL.includes('localhost')) {
+      try {
+        return await tryFetch('http://127.0.0.1:8000/api/v1');
+      } catch {
+        // ignore
+      }
     }
     throw err;
   }

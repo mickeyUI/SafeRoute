@@ -8,7 +8,8 @@ import type {
 } from './types';
 import { getToken } from './auth';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+const DEFAULT_API_BASE_URL = 'https://saferoute-ezbz.onrender.com/api/v1';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE_URL;
 const PHOTON_ENDPOINT = import.meta.env.VITE_GEOCODING_ENDPOINT || 'https://photon.komoot.io/api/';
 const OSRM_ENDPOINT = import.meta.env.VITE_ROUTING_ENDPOINT || 'https://router.project-osrm.org/route/v1/driving';
 
@@ -62,24 +63,46 @@ async function apiRequest<T>(endpoint: string, options?: RequestInit): Promise<T
     }
     return (await res.json()) as T;
   } catch (error) {
-    // If relative API call failed (e.g. proxy not active), try direct localhost:8000 fallback
-    if (!endpoint.startsWith('http') && !API_BASE_URL.startsWith('http')) {
-      const fallbackUrl = `http://127.0.0.1:8000/api/v1${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
-      const res = await fetch(fallbackUrl, {
-        ...options,
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-          ...authHeaders,
-          ...(options?.headers || {}),
-        },
-      });
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => ({}));
-        const message = errBody?.error?.message || errBody?.detail || `API request failed with status ${res.status}`;
-        throw new Error(message);
+    // If request failed and wasn't already calling Render backend, try deployed Render fallback
+    if (!url.startsWith('https://saferoute-ezbz.onrender.com')) {
+      try {
+        const renderFallbackUrl = `https://saferoute-ezbz.onrender.com/api/v1${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
+        const res = await fetch(renderFallbackUrl, {
+          ...options,
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            ...authHeaders,
+            ...(options?.headers || {}),
+          },
+        });
+        if (res.ok) {
+          return (await res.json()) as T;
+        }
+      } catch {
+        // continue
       }
-      return (await res.json()) as T;
+    }
+
+    // Local dev fallback if running locally
+    if (!url.includes('127.0.0.1') && !url.includes('localhost')) {
+      try {
+        const localFallbackUrl = `http://127.0.0.1:8000/api/v1${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
+        const res = await fetch(localFallbackUrl, {
+          ...options,
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            ...authHeaders,
+            ...(options?.headers || {}),
+          },
+        });
+        if (res.ok) {
+          return (await res.json()) as T;
+        }
+      } catch {
+        // continue
+      }
     }
     throw error;
   }
@@ -95,9 +118,18 @@ export async function checkBackendHealth(): Promise<{ online: boolean; version?:
     };
   } catch {
     try {
-      const direct = await fetch('http://127.0.0.1:8000/health');
+      const direct = await fetch('https://saferoute-ezbz.onrender.com/api/v1/health');
       if (direct.ok) {
         const data = await direct.json();
+        return { online: true, version: data.version, routingProvider: data.routing_provider };
+      }
+    } catch {
+      // offline
+    }
+    try {
+      const local = await fetch('http://127.0.0.1:8000/health');
+      if (local.ok) {
+        const data = await local.json();
         return { online: true, version: data.version, routingProvider: data.routing_provider };
       }
     } catch {
@@ -188,6 +220,24 @@ export async function fetchBackendSafeLocations(center: LatLng, radiusMeters = 8
     verificationStatus: (feat.properties.verification_status as 'verified' | 'pending') || 'verified',
     position: [feat.geometry.coordinates[1], feat.geometry.coordinates[0]] as LatLng,
   }));
+}
+
+export async function createBackendContact(contact: {
+  name: string;
+  phone: string;
+  email?: string;
+  relationship?: string;
+}): Promise<{ id: string; name: string; phone: string }> {
+  return apiRequest<{ id: string; name: string; phone: string }>('/contacts', {
+    method: 'POST',
+    body: JSON.stringify(contact),
+  });
+}
+
+export async function fetchBackendContacts(): Promise<Array<{ id: string; name: string; phone: string }>> {
+  return apiRequest<Array<{ id: string; name: string; phone: string }>>('/contacts', {
+    method: 'GET',
+  });
 }
 
 export async function triggerBackendSos(
@@ -335,6 +385,46 @@ export interface RouteChoice {
   route: RouteCandidate | null;
 }
 
+function interpolateSmoothCurve(points: LatLng[]): LatLng[] {
+  if (points.length < 3) return points;
+  const [start, mid, end] = points;
+  const result: LatLng[] = [];
+  const steps = 30;
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const lat = (1 - t) ** 2 * start[0] + 2 * (1 - t) * t * mid[0] + t ** 2 * end[0];
+    const lon = (1 - t) ** 2 * start[1] + 2 * (1 - t) * t * mid[1] + t ** 2 * end[1];
+    result.push([Number(lat.toFixed(6)), Number(lon.toFixed(6))]);
+  }
+  return result;
+}
+
+export async function snapToStreetGeometry(points: LatLng[]): Promise<LatLng[]> {
+  if (points.length < 2) return points;
+  try {
+    const coordsStr = points.map(([lat, lon]) => `${lon.toFixed(6)},${lat.toFixed(6)}`).join(';');
+    let url = `https://router.project-osrm.org/route/v1/foot/${coordsStr}?overview=full&geometries=geojson`;
+    let response = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (!response.ok) {
+      url = `https://router.project-osrm.org/route/v1/driving/${coordsStr}?overview=full&geometries=geojson`;
+      response = await fetch(url, { headers: { Accept: 'application/json' } });
+    }
+    if (response.ok) {
+      const data = await response.json();
+      if (data.code === 'Ok' && data.routes?.length) {
+        const coords = data.routes[0].geometry.coordinates;
+        if (coords?.length >= 2) {
+          return coords.map(([lon, lat]: [number, number]) => [lat, lon] as LatLng);
+        }
+      }
+    }
+  } catch {
+    // Offline or network error
+  }
+
+  return interpolateSmoothCurve(points);
+}
+
 export async function compareRoutesWithBackend(
   start: LatLng,
   end: LatLng,
@@ -392,6 +482,18 @@ export async function compareRoutesWithBackend(
       isBackendRanked: true,
     };
   });
+
+  // Ensure every route candidate follows street curves even if backend returned a stub geometry
+  await Promise.all(
+    candidates.map(async (candidate) => {
+      if (candidate.coordinates.length <= 4) {
+        const streetCoords = await snapToStreetGeometry(candidate.coordinates);
+        if (streetCoords.length > candidate.coordinates.length) {
+          candidate.coordinates = streetCoords;
+        }
+      }
+    }),
+  );
 
   const safest = candidates[0] || null;
   const balanced = candidates.length > 1 ? candidates[1] : null;
@@ -460,7 +562,45 @@ export async function getDrivingRoutes(start: LatLng, end: LatLng): Promise<Rout
   const data = (await response.json()) as OsrmRouteResponse;
   if (data.code !== 'Ok' || !data.routes?.length) throw new Error('No driving route was found between those points.');
 
-  return data.routes.map((route, index) => ({
+  const rawRoutes = [...(data.routes ?? [])];
+
+  // If OSRM returned fewer than 3 routes, fetch lateral street corridor alternatives
+  if (rawRoutes.length < 3) {
+    const dLat = end[0] - start[0];
+    const dLng = end[1] - start[1];
+    const distDeg = Math.hypot(dLat, dLng) || 0.0001;
+    const pLat = -dLng / distDeg;
+    const pLng = dLat / distDeg;
+    const latOffset = Math.max(0.0011, Math.min(0.0055, distDeg * 0.16));
+
+    const candidateOffsets = [latOffset, -latOffset, latOffset * 1.8, -latOffset * 1.8];
+    for (const offset of candidateOffsets) {
+      if (rawRoutes.length >= 3) break;
+      const viaLat = Number((start[0] + dLat * 0.5 + pLat * offset).toFixed(6));
+      const viaLng = Number((start[1] + dLng * 0.5 + pLng * offset).toFixed(6));
+      const viaCoords = `${start[1]},${start[0]};${viaLng},${viaLat};${end[1]},${end[0]}`;
+      try {
+        const altRes = await fetch(
+          `${OSRM_ENDPOINT}/${viaCoords}?overview=full&geometries=geojson&steps=true&alternatives=false`,
+          { headers: { Accept: 'application/json' } },
+        );
+        if (altRes.ok) {
+          const altData = (await altRes.json()) as OsrmRouteResponse;
+          if (altData.code === 'Ok' && altData.routes?.length) {
+            const altRoute = altData.routes[0];
+            const isDistinct = !rawRoutes.some((r) => Math.abs(r.distance - altRoute.distance) < 25);
+            if (isDistinct && altRoute.geometry.coordinates.length >= 2) {
+              rawRoutes.push(altRoute);
+            }
+          }
+        }
+      } catch {
+        // continue
+      }
+    }
+  }
+
+  return rawRoutes.map((route, index) => ({
     id: `route-${index}`,
     coordinates: route.geometry.coordinates.map(([lng, lat]) => [lat, lng] as LatLng),
     distanceMeters: route.distance,
@@ -551,10 +691,17 @@ export function buildRouteChoices(routes: RouteCandidate[]): RouteChoice[] {
     ? null
     : higherExposurePool.filter((route) => route.reportedRiskScore >= highestExposure - 0.05).sort((a, b) => a.distanceMeters - b.distanceMeters)[0] ?? null;
 
+  // Fallbacks if incident exposure is uniform or no reports exist in area
+  const remaining = routes.filter((r) => !usedIds.has(r.id));
+  const secondary = longestSafe ?? (remaining.length ? remaining[0] : null);
+  if (secondary) usedIds.add(secondary.id);
+  const remainingAfterSecondary = routes.filter((r) => !usedIds.has(r.id));
+  const thirdRoute = shortestHigherRisk ?? (remainingAfterSecondary.length ? remainingAfterSecondary[0] : null);
+
   return [
     { kind: 'shortest-safest', title: 'Shortest & safest', subtitle: 'Shortest option among paths with the lowest local report exposure', route: shortestSafe },
-    { kind: 'longest-safest', title: 'Longest & safest', subtitle: 'Longest distinct option with similarly low local report exposure', route: longestSafe ?? null },
-    { kind: 'shortest-higher-risk', title: 'Shortest · higher reported risk', subtitle: 'Shortest distinct option with the highest local report exposure', route: shortestHigherRisk },
+    { kind: 'longest-safest', title: 'Balanced alternative', subtitle: 'Distinct pedestrian corridor with low exposure', route: secondary },
+    { kind: 'shortest-higher-risk', title: 'Faster · Higher risk corridor', subtitle: 'Alternative corridor option with direct passage', route: thirdRoute },
   ];
 }
 

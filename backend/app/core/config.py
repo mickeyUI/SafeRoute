@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     ]
 
     # Routing Configuration (Strategy Pattern: "osrm", "graphhopper", "stub")
-    routing_provider: Literal["stub", "graphhopper", "osrm"] = "stub"
+    routing_provider: Literal["stub", "graphhopper", "osrm"] = "osrm"
     routing_alternatives: int = 3
     routing_timeout_seconds: int = 5
     graphhopper_url: str = "https://graphhopper.com/api/1/route"

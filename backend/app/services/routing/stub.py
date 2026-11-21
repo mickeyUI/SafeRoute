@@ -40,12 +40,14 @@ class StubRoutingProvider(RoutingProvider):
         options: list[RouteOption] = []
         for index in range(alternatives):
             offset = (index - (alternatives - 1) / 2) * 0.004
-            bend = (perpendicular[0] * offset, perpendicular[1] * offset)
-            geometry = [
-                start,
-                (mid[0] + bend[0], mid[1] + bend[1]),
-                end,
-            ]
+            control = (mid[0] + perpendicular[0] * offset, mid[1] + perpendicular[1] * offset)
+            geometry = []
+            steps = 25
+            for s in range(steps + 1):
+                t = s / steps
+                x = (1 - t) ** 2 * start[0] + 2 * (1 - t) * t * control[0] + t ** 2 * end[0]
+                y = (1 - t) ** 2 * start[1] + 2 * (1 - t) * t * control[1] + t ** 2 * end[1]
+                geometry.append((x, y))
             distance = sum(
                 _haversine(geometry[i], geometry[i + 1]) for i in range(len(geometry) - 1)
             )

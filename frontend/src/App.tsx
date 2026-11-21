@@ -809,8 +809,36 @@ export default function App() {
             <CircleMarker center={routeDestination} radius={7} pathOptions={{ color: '#ffffff', weight: 2, fillColor: '#db4f91', fillOpacity: 1 }} />
           </>
         )}
+        {routeChoices
+          .filter((choice) => choice.route && choice.kind !== selectedRouteKind)
+          .map((choice) => (
+            <Polyline
+              key={`alt-${choice.kind}`}
+              positions={choice.route!.coordinates}
+              pathOptions={{
+                color: '#64748b',
+                weight: 5,
+                opacity: 0.55,
+                dashArray: '8, 8',
+                lineCap: 'round',
+                lineJoin: 'round',
+              }}
+              eventHandlers={{
+                click: () => selectRouteChoice(choice),
+              }}
+            />
+          ))}
         {routePreview && (
-          <Polyline positions={routePreview.coordinates} pathOptions={{ color: THEMES.find((item) => item.id === theme)?.color ?? '#d94f91', weight: 6, opacity: 0.92, lineCap: 'round', lineJoin: 'round' }} />
+          <Polyline
+            positions={routePreview.coordinates}
+            pathOptions={{
+              color: THEMES.find((item) => item.id === theme)?.color ?? '#d94f91',
+              weight: 6,
+              opacity: 0.92,
+              lineCap: 'round',
+              lineJoin: 'round',
+            }}
+          />
         )}
       </MapContainer>
 

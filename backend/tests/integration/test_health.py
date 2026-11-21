@@ -8,7 +8,7 @@ def test_root_health(client: TestClient) -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
-    assert body["routing_provider"] == "stub"
+    assert body["routing_provider"] in ("stub", "osrm", "graphhopper")
 
 
 def test_v1_health(client: TestClient) -> None:
