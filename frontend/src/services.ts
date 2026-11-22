@@ -380,6 +380,11 @@ export async function triggerBackendSos(
       });
       shareToken = share.share_token;
       shareUrl = buildTrackPath(shareToken);
+      try {
+        await sendJourneyCheckin(journeyId, position, 'SOS activated — initial position');
+      } catch {
+        // The tracking page still shows the journey origin until the first update arrives.
+      }
     }
   } catch {
     // Journey optional
@@ -406,6 +411,28 @@ export async function triggerBackendSos(
   }
 
   return { reportId, journeyId, shareToken, shareUrl, alertId, radiusMeters };
+}
+
+/** Send the SOS sender's current position to the live tracking journey. */
+export async function sendJourneyCheckin(
+  journeyId: string,
+  position: LatLng,
+  note = 'Live SOS location update',
+): Promise<void> {
+  await apiRequest(`/journeys/${journeyId}/checkin`, {
+    method: 'POST',
+    body: JSON.stringify({
+      latitude: position[0],
+      longitude: position[1],
+      checkin_type: 'milestone',
+      note,
+    }),
+  });
+}
+
+/** Stop a shared tracking journey when the SOS is resolved. */
+export async function cancelJourney(journeyId: string): Promise<void> {
+  await apiRequest(`/journeys/${journeyId}/cancel`, { method: 'PATCH' });
 }
 
 export async function fetchNearbySosAlerts(

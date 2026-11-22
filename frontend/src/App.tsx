@@ -52,6 +52,7 @@ import {
   buildRouteChoices,
   buildSmsUrl,
   buildTrackUrl,
+  cancelJourney,
   checkBackendHealth,
   resolveAppUrl,
   compareRoutesWithBackend,
@@ -66,6 +67,7 @@ import {
   searchPlaces,
   openSmsApp,
   resolveSosAlert,
+  sendJourneyCheckin,
   submitBackendReport,
   triggerBackendSos,
   type RouteCandidate,
@@ -120,6 +122,7 @@ interface SosResult {
   position: LatLng;
   reason?: string;
   alertId?: string;
+  journeyId?: string;
   sharePath?: string;
   shareUrl?: string;
   smsUrl?: string;
@@ -442,6 +445,38 @@ export default function App() {
   useEffect(() => {
     if (userLocation) saveLastLocation(userLocation);
   }, [userLocation]);
+
+  // While an SOS is active, follow the device so the tracking link shows movement.
+  // Safety alerts already run their own watcher, so don't start a duplicate one.
+  useEffect(() => {
+    const journeyId = sosResult?.journeyId;
+    if (!journeyId || safetyMonitoring || !navigator.geolocation) return;
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => setUserLocation([position.coords.latitude, position.coords.longitude]),
+      () => { /* The locate button can retry if permission is lost. */ },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 },
+    );
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [sosResult?.journeyId, safetyMonitoring]);
+
+  // Push the current position to the shared journey every 15 seconds. The
+  // tracking page refreshes on the same cadence.
+  useEffect(() => {
+    const journeyId = sosResult?.journeyId;
+    if (!journeyId) return;
+
+    const initialPoint = userLocationRef.current ?? sosResult?.position;
+    if (initialPoint) {
+      void sendJourneyCheckin(journeyId, initialPoint).catch(() => {});
+    }
+
+    const interval = window.setInterval(() => {
+      const point = userLocationRef.current;
+      if (point) void sendJourneyCheckin(journeyId, point).catch(() => {});
+    }, 15000);
+
+    return () => window.clearInterval(interval);
+  }, [sosResult]);
 
   // Poll the backend for SOS alerts broadcast by other nearby users. Without a
   // real position there is nowhere meaningful to search, so skip instead of
@@ -1023,6 +1058,7 @@ export default function App() {
       position,
       reason: reason.trim() || undefined,
       alertId: shareInfo?.alertId,
+      journeyId: shareInfo?.journeyId,
       sharePath,
       shareUrl,
       smsUrl,
@@ -1062,16 +1098,23 @@ export default function App() {
 
   async function resolveCurrentSos() {
     const alertId = sosResult?.alertId;
-    if (!alertId) {
+    const journeyId = sosResult?.journeyId;
+    if (!alertId && !journeyId) {
       setNotice('This alert was only saved on this device.');
       return;
     }
     try {
-      await resolveSosAlert(alertId, clientId);
+      if (alertId) await resolveSosAlert(alertId, clientId);
+      if (journeyId) await cancelJourney(journeyId);
       setSosRequests((current) => current.map((request) => (
-        request.alertId === alertId ? { ...request, status: 'Resolved' } : request
+        (alertId && request.alertId === alertId) || (journeyId && request.journeyId === journeyId)
+          ? { ...request, status: 'Resolved' }
+          : request
       )));
-      setNearbySosAlerts((current) => current.filter((alert) => alert.alertId !== alertId));
+      if (alertId) {
+        setNearbySosAlerts((current) => current.filter((alert) => alert.alertId !== alertId));
+      }
+      setSosResult(null);
       setNotice('SOS resolved. Location sharing has stopped.');
     } catch (err) {
       setNotice(err instanceof Error ? err.message : 'Could not stop sharing this alert.');
