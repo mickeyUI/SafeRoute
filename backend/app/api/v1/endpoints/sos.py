@@ -1,9 +1,22 @@
+"""SOS alert endpoints.
+
+Two compatible SOS APIs live here:
+
+* ``/sos/alerts`` — the public broadcast/nearby/resolve API used by the
+  map UI for one-tap SOS and live nearby discovery.
+* ``/sos`` and ``/sos/mine`` — the authenticated, recorded-alert API used by
+  the account-based frontend.
+"""
+
+from __future__ import annotations
+
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.core.security import get_optional_current_user
-from app.schemas.sos import SosAlertCreate
+from app.core.security import get_current_user, get_optional_current_user
+from app.schemas.sos import SosAlertCreate, SosCreate, SosRead
+from app.services import sos_service
 from app.services.data_store import data_store
 
 router = APIRouter()
@@ -88,3 +101,21 @@ async def resolve_sos_alert(
         "status": "resolved",
         "message": "Location sharing stopped. Nearby clients will no longer see this alert.",
     }
+
+
+@router.post("", response_model=SosRead, status_code=status.HTTP_201_CREATED)
+def create_sos(
+    payload: SosCreate,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> SosRead:
+    """Record an authenticated SOS alert for the signed-in user."""
+    return sos_service.create_alert(current_user["id"], payload)
+
+
+@router.get("/mine", response_model=list[SosRead])
+def my_sos_alerts(
+    limit: int = Query(25, ge=1, le=100),
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> list[SosRead]:
+    """List the signed-in user's recorded SOS alerts."""
+    return sos_service.list_mine(current_user["id"], limit)

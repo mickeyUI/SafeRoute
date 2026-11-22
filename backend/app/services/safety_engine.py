@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
-from typing import List, Dict, Any, Tuple, Optional
+from datetime import UTC, datetime
+from typing import Any
+
 from app.schemas.route import (
-    RoutePreference,
-    SafetyIndicator,
-    SafetyFactors,
+    GeoJSONLineString,
     RouteOption,
-    GeoJSONLineString
+    RoutePreference,
+    SafetyFactors,
+    SafetyIndicator,
 )
+
 
 class SafetyScoringEngine:
     """
@@ -27,15 +29,10 @@ class SafetyScoringEngine:
 
     # Factor weights for segment risk calculation:
     # Risk = 0.40*I + 0.25*L + 0.20*S + 0.15*A
-    FACTOR_WEIGHTS = {
-        "incident": 0.40,
-        "lighting": 0.25,
-        "isolation": 0.20,
-        "activity": 0.15
-    }
+    FACTOR_WEIGHTS = {"incident": 0.40, "lighting": 0.25, "isolation": 0.20, "activity": 0.15}
 
     @staticmethod
-    def haversine_distance(coord1: Tuple[float, float], coord2: Tuple[float, float]) -> float:
+    def haversine_distance(coord1: tuple[float, float], coord2: tuple[float, float]) -> float:
         """
         Calculate the great circle distance between two points in meters.
         coord: (longitude, latitude)
@@ -43,18 +40,25 @@ class SafetyScoringEngine:
         lon1, lat1 = coord1
         lon2, lat2 = coord2
         R = 6371000.0  # Earth radius in meters
-        
+
         phi1 = math.radians(lat1)
         phi2 = math.radians(lat2)
         delta_phi = math.radians(lat2 - lat1)
         delta_lambda = math.radians(lon2 - lon1)
-        
-        a = (math.sin(delta_phi / 2.0) ** 2 +
-             math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2.0) ** 2)
+
+        a = (
+            math.sin(delta_phi / 2.0) ** 2
+            + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2.0) ** 2
+        )
         c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
         return R * c
 
-    def min_distance_to_segment(self, point: Tuple[float, float], seg_start: Tuple[float, float], seg_end: Tuple[float, float]) -> float:
+    def min_distance_to_segment(
+        self,
+        point: tuple[float, float],
+        seg_start: tuple[float, float],
+        seg_end: tuple[float, float],
+    ) -> float:
         """
         Approximate distance in meters from a point to a line segment.
         """
@@ -70,10 +74,10 @@ class SafetyScoringEngine:
 
     def calculate_incident_risk(
         self,
-        route_coords: List[List[float]],
-        reports: List[Dict[str, Any]],
-        buffer_meters: float = 120.0
-    ) -> Tuple[float, int, List[str]]:
+        route_coords: list[list[float]],
+        reports: list[dict[str, Any]],
+        buffer_meters: float = 120.0,
+    ) -> tuple[float, int, list[str]]:
         """
         Calculates incident risk (0-100) along the route corridor with time-decay.
         Returns: (incident_risk, count_of_nearby_reports, observations)
@@ -82,7 +86,7 @@ class SafetyScoringEngine:
             return 25.0, 0, ["No community incident reports recorded directly along this path."]
 
         matched_reports = []
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         for report in reports:
             rep_coord = (report.get("longitude", 0.0), report.get("latitude", 0.0))
@@ -90,12 +94,12 @@ class SafetyScoringEngine:
             is_near = False
             for i in range(len(route_coords) - 1):
                 p1 = (route_coords[i][0], route_coords[i][1])
-                p2 = (route_coords[i+1][0], route_coords[i+1][1])
+                p2 = (route_coords[i + 1][0], route_coords[i + 1][1])
                 dist = self.min_distance_to_segment(rep_coord, p1, p2)
                 if dist <= buffer_meters:
                     is_near = True
                     break
-            
+
             if is_near:
                 matched_reports.append(report)
 
@@ -113,10 +117,10 @@ class SafetyScoringEngine:
             if isinstance(created_at, datetime):
                 # Ensure timezone-aware comparison
                 if created_at.tzinfo is None:
-                    created_at = created_at.replace(tzinfo=timezone.utc)
+                    created_at = created_at.replace(tzinfo=UTC)
                 age_days = (now - created_at).total_seconds() / 86400.0
                 decay_factor = max(0.25, 1.0 - (age_days / 90.0))
-            
+
             category = rep.get("category", "incident").replace("_", " ").title()
             penalty = sev * 12.0 * decay_factor
             total_penalty += penalty
@@ -126,10 +130,8 @@ class SafetyScoringEngine:
         return normalized_risk, len(matched_reports), observations[:3]
 
     def calculate_lighting_and_isolation(
-        self,
-        summary: str,
-        departure_hour: Optional[int] = None
-    ) -> Tuple[float, float, List[str]]:
+        self, summary: str, departure_hour: int | None = None
+    ) -> tuple[float, float, list[str]]:
         """
         Calculates lighting and isolation risk based on road class heuristic and time-of-day.
         """
@@ -140,14 +142,22 @@ class SafetyScoringEngine:
             is_night = departure_hour >= 19 or departure_hour < 6
 
         # Road hierarchy heuristics
-        if any(term in summary_lower for term in ["avenue", "ave", "boulevard", "street", "main", "expressway", "road"]):
+        if any(
+            term in summary_lower
+            for term in ["avenue", "ave", "boulevard", "street", "main", "expressway", "road"]
+        ):
             lighting_risk = 30.0 if not is_night else 45.0
             isolation_risk = 25.0
             observations.append("Follows arterial avenue with higher public visibility.")
-        elif any(term in summary_lower for term in ["alley", "path", "shortcut", "unnamed", "track", "footway"]):
+        elif any(
+            term in summary_lower
+            for term in ["alley", "path", "shortcut", "unnamed", "track", "footway"]
+        ):
             lighting_risk = 70.0 if not is_night else 85.0
             isolation_risk = 75.0
-            observations.append("Contains secondary footways/alleys with limited lighting and sightlines.")
+            observations.append(
+                "Contains secondary footways/alleys with limited lighting and sightlines."
+            )
         else:
             lighting_risk = 50.0
             isolation_risk = 50.0
@@ -162,10 +172,10 @@ class SafetyScoringEngine:
 
     def calculate_safe_havens(
         self,
-        route_coords: List[List[float]],
-        safe_locations: List[Dict[str, Any]],
-        buffer_meters: float = 200.0
-    ) -> Tuple[int, float, List[str]]:
+        route_coords: list[list[float]],
+        safe_locations: list[dict[str, Any]],
+        buffer_meters: float = 200.0,
+    ) -> tuple[int, float, list[str]]:
         """
         Evaluates nearby verified safe locations (police stations, 24/7 hospitals).
         Reduces composite risk.
@@ -179,7 +189,7 @@ class SafetyScoringEngine:
             is_near = False
             for i in range(len(route_coords) - 1):
                 p1 = (route_coords[i][0], route_coords[i][1])
-                p2 = (route_coords[i+1][0], route_coords[i+1][1])
+                p2 = (route_coords[i + 1][0], route_coords[i + 1][1])
                 if self.min_distance_to_segment(loc_coord, p1, p2) <= buffer_meters:
                     is_near = True
                     break
@@ -200,9 +210,9 @@ class SafetyScoringEngine:
         distance_meters: float,
         duration_seconds: float,
         geometry: GeoJSONLineString,
-        reports: List[Dict[str, Any]],
-        safe_locations: List[Dict[str, Any]],
-        departure_hour: Optional[int] = None
+        reports: list[dict[str, Any]],
+        safe_locations: list[dict[str, Any]],
+        departure_hour: int | None = None,
     ) -> SafetyIndicator:
         """
         Evaluates all factors to build a complete SafetyIndicator.
@@ -213,7 +223,9 @@ class SafetyScoringEngine:
         incident_risk, inc_count, inc_obs = self.calculate_incident_risk(coords, reports)
 
         # 2. Lighting & Isolation
-        lighting_risk, isolation_risk, road_obs = self.calculate_lighting_and_isolation(summary, departure_hour)
+        lighting_risk, isolation_risk, road_obs = self.calculate_lighting_and_isolation(
+            summary, departure_hour
+        )
 
         # 3. Activity risk (derived from road visibility and time)
         activity_risk = 35.0 if departure_hour and 8 <= departure_hour <= 18 else 60.0
@@ -224,10 +236,10 @@ class SafetyScoringEngine:
         # 5. Composite Risk Score
         # Formula: 0.40*I + 0.25*L + 0.20*S + 0.15*A - Haven_Bonus
         raw_risk = (
-            self.FACTOR_WEIGHTS["incident"] * incident_risk +
-            self.FACTOR_WEIGHTS["lighting"] * lighting_risk +
-            self.FACTOR_WEIGHTS["isolation"] * isolation_risk +
-            self.FACTOR_WEIGHTS["activity"] * activity_risk
+            self.FACTOR_WEIGHTS["incident"] * incident_risk
+            + self.FACTOR_WEIGHTS["lighting"] * lighting_risk
+            + self.FACTOR_WEIGHTS["isolation"] * isolation_risk
+            + self.FACTOR_WEIGHTS["activity"] * activity_risk
         )
         final_risk = max(5.0, min(95.0, raw_risk - haven_bonus))
 
@@ -271,10 +283,8 @@ class SafetyScoringEngine:
         )
 
     def rank_routes(
-        self,
-        candidate_routes: List[RouteOption],
-        preference: RoutePreference
-    ) -> List[RouteOption]:
+        self, candidate_routes: list[RouteOption], preference: RoutePreference
+    ) -> list[RouteOption]:
         """
         Ranks candidate routes by Route Cost = alpha*D + beta*T + gamma*R
         """
@@ -300,5 +310,6 @@ class SafetyScoringEngine:
 
         # Sort ascending by cost (lowest cost is preferred)
         return sorted(candidate_routes, key=lambda r: r.cost_score)
+
 
 safety_engine = SafetyScoringEngine()

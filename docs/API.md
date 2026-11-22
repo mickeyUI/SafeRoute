@@ -79,7 +79,8 @@ Response (abridged):
       "safety_factors": {
         "report_penalty": 3.2,
         "coverage_bonus": 2.0,
-        "length_penalty": 0.4
+        "length_penalty": 0.4,
+        "nearby_report_count": 1
       },
       "geometry": [[-122.4194, 37.7749], [-122.414, 37.7807]]
     }
@@ -170,6 +171,27 @@ tracking link; browsers cannot send SMS silently without an SMS gateway.
 | POST | `/contacts` | yes | Add a trusted contact (201) |
 | GET | `/contacts` | yes | List own contacts |
 | DELETE | `/contacts/{contact_id}` | yes | Remove a contact (204) |
+
+## SOS alerts
+
+| Method | Path | Auth | Description |
+| --- | --- | --- | --- |
+| POST | `/sos` | yes | Record an SOS alert (201) |
+| GET | `/sos/mine` | yes | List your recent SOS alerts |
+
+Create body:
+
+```json
+{
+  "location": [38.74, 9.03],
+  "reason": "Feeling unsafe near the station",
+  "voice_attached": false,
+  "picture_name": null
+}
+```
+
+Alerts are persisted with status `active`. The scaffold logs a simulated contact
+notification; it does **not** send SMS, email, push, or contact emergency services.
 
 ## Pagination
 

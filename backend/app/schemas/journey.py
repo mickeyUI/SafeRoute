@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Optional, List, Any
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -20,8 +20,8 @@ class JourneyCreate(BaseModel):
     travel_mode: TravelMode = TravelMode.walk
     route_id: UUID | None = None
     contact_id: UUID | None = None
-    estimated_duration_seconds: Optional[int] = 1800
-    route_coordinates: Optional[List[List[float]]] = None
+    estimated_duration_seconds: int | None = 1800
+    route_coordinates: list[list[float]] | None = None
 
 
 class JourneyRead(BaseModel):
@@ -45,12 +45,12 @@ class JourneyCheckinCreate(BaseModel):
     latitude: float
     longitude: float
     checkin_type: str = "manual_confirm"  # manual_confirm, milestone, arrival
-    note: Optional[str] = None
+    note: str | None = None
 
 
 class JourneyShareCreate(BaseModel):
-    trusted_contact_name: Optional[str] = None
-    trusted_contact_phone: Optional[str] = None
+    trusted_contact_name: str | None = None
+    trusted_contact_phone: str | None = None
     valid_hours: int = Field(default=2, ge=1, le=24)
 
 
@@ -60,9 +60,9 @@ class SharedJourneyView(BaseModel):
     origin: Coordinate
     destination: Coordinate
     started_at: datetime
-    estimated_arrival_at: Optional[datetime] = None
-    last_checkin_at: Optional[datetime] = None
-    last_checkin_type: Optional[str] = None
+    estimated_arrival_at: datetime | None = None
+    last_checkin_at: datetime | None = None
+    last_checkin_type: str | None = None
     is_valid: bool = True
     remaining_minutes: int = 120
 
@@ -80,7 +80,7 @@ class ContactRead(BaseModel):
 
     id: Any
     name: str
-    phone: Optional[str] = None
+    phone: str | None = None
     email: str | None = None
     relationship: str | None = None
     is_primary: bool = False

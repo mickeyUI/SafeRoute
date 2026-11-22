@@ -63,6 +63,7 @@ FastAPI application
 | `contacts` | Trusted contacts for journey alerts | — |
 | `routes` | Persisted alternatives from one comparison | `LineString` |
 | `journeys` | Planned/active/completed trips with check-ins | `Point` start + destination |
+| `sos_alerts` | Recorded emergency alerts with optional attachment flags | `Point` |
 
 All geometry uses SRID 4326 (WGS84 lon/lat) and GiST indexes are created in Alembic
 migrations. Distances are computed with `ST_DWithin` in SQL or haversine in the scorer.
@@ -86,6 +87,10 @@ Reports must be `approved` and no older than `REPORT_MAX_AGE_DAYS` to count.
 `planned -> active -> completed`, with `cancelled` as a terminal branch. The
 `workers/reminders.py` module is a placeholder for the check-in timeout job. In the
 MVP, check-in state is stored but no notifications are dispatched.
+
+SOS alerts are persisted through `POST /api/v1/sos` and listed via `GET /sos/mine`.
+The backend logs a simulated contact notification; it does not send SMS, email, push,
+or contact emergency services.
 
 ## Phasing
 

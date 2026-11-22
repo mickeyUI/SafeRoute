@@ -33,10 +33,6 @@ def list_for_user(
     filters = (Route.user_id == user_id,)
     total = db.scalar(select(func.count()).select_from(Route).where(*filters)) or 0
     stmt = (
-        select(Route)
-        .where(*filters)
-        .order_by(Route.created_at.desc())
-        .limit(limit)
-        .offset(offset)
+        select(Route).where(*filters).order_by(Route.created_at.desc()).limit(limit).offset(offset)
     )
     return list(db.scalars(stmt).all()), total

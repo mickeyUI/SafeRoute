@@ -1,9 +1,12 @@
-.PHONY: help install dev db-up db-down db-init revision migrate test lint format openapi clean
+.PHONY: help install dev db-up db-down db-init revision migrate test lint format openapi web-install web-dev web-build clean
 
 PYTHON ?= python3
 VENV ?= .venv
+NPM ?= npm
+WEB_DIR := apps/web
 PIP := $(VENV)/bin/pip
 PY := $(VENV)/bin/python
+PY_ABS := $(abspath $(PY))
 
 help: ## Show available commands
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -27,10 +30,10 @@ db-init: ## Ensure the PostGIS extension exists
 	$(PY) -m app.db.init_postgis
 
 revision: ## Create a migration: make revision m="add users"
-	cd backend && alembic revision --autogenerate -m "$(m)"
+	cd backend && $(PY_ABS) -m alembic revision --autogenerate -m "$(m)"
 
 migrate: ## Apply all migrations
-	cd backend && alembic upgrade head
+	cd backend && $(PY_ABS) -m alembic upgrade head
 
 test: ## Run the test suite
 	$(PY) -m pytest backend/tests -q
@@ -45,6 +48,15 @@ format: ## Format backend code
 openapi: ## Write the OpenAPI schema to docs/openapi.json
 	$(PY) -c "import json,pathlib; from app.main import create_app; \
 		pathlib.Path('docs/openapi.json').write_text(json.dumps(create_app().openapi(), indent=2))"
+
+web-install: ## Install frontend dependencies
+	cd $(WEB_DIR) && $(NPM) install
+
+web-dev: ## Run the React frontend (proxies /api to the backend)
+	cd $(WEB_DIR) && $(NPM) run dev
+
+web-build: ## Build the production frontend bundle
+	cd $(WEB_DIR) && $(NPM) run build
 
 clean: ## Remove caches
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
