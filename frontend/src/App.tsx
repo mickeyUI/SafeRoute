@@ -7,6 +7,7 @@ import {
   ArrowRight,
   Check,
   ChevronDown,
+  ChevronUp,
   Church,
   Coffee,
   Copy,
@@ -163,6 +164,20 @@ function MapInteraction({
     if (flyTo) map.flyTo(flyTo, 15, { duration: 0.8 });
   }, [flyTo, map]);
 
+  useEffect(() => {
+    const handleResize = () => {
+      map.invalidateSize();
+    };
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('orientationchange', handleResize);
+    const timer = setTimeout(handleResize, 200);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('orientationchange', handleResize);
+      clearTimeout(timer);
+    };
+  }, [map]);
+
   useMapEvents({
     click(event) {
       if (mode !== 'idle') onPick([event.latlng.lat, event.latlng.lng]);
@@ -233,6 +248,14 @@ function distanceMeters(a: LatLng, b: LatLng): number {
   return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
+/** Calculated geographic radius in meters for a safety hazard zone based on severity. */
+function getReportSafetyRadius(report: SafetyReport): number {
+  if (typeof report.severity === 'number' && report.severity > 0) {
+    return Math.max(100, Math.min(500, Math.round(report.severity * 60)));
+  }
+  return UNSAFE_RADIUS_METERS;
+}
+
 function getSavedSafetyMonitoring(): boolean {
   try {
     return localStorage.getItem(SAFETY_MONITOR_KEY) === 'true';
@@ -300,6 +323,7 @@ export default function App() {
   const [searchMarker, setSearchMarker] = useState<LatLng | null>(null);
   const [flyTo, setFlyTo] = useState<LatLng | null>(null);
   const [userLocation, setUserLocation] = useState<LatLng | null>(null);
+  const [userAccuracy, setUserAccuracy] = useState<number | null>(null);
   const [locationBusy, setLocationBusy] = useState(false);
   const [notice, setNotice] = useState('');
 
@@ -320,6 +344,7 @@ export default function App() {
   const [routeOrigin, setRouteOrigin] = useState<LatLng | null>(null);
   const [routeDestination, setRouteDestination] = useState<LatLng | null>(null);
   const [routeChoices, setRouteChoices] = useState<RouteChoice[]>([]);
+  const [routePanelMinimized, setRoutePanelMinimized] = useState(false);
   const [routePreview, setRoutePreview] = useState<RouteCandidate | null>(null);
   const [selectedRouteKind, setSelectedRouteKind] = useState<RouteChoiceKind>('shortest-safest');
   const [routeBusy, setRouteBusy] = useState(false);
@@ -347,6 +372,9 @@ export default function App() {
         if (!active) return;
         const point: LatLng = [position.coords.latitude, position.coords.longitude];
         setUserLocation(point);
+        if (typeof position.coords.accuracy === 'number' && Number.isFinite(position.coords.accuracy)) {
+          setUserAccuracy(position.coords.accuracy);
+        }
         setFlyTo(point);
       },
       () => {
@@ -451,7 +479,12 @@ export default function App() {
     const journeyId = sosResult?.journeyId;
     if (!journeyId || safetyMonitoring || !navigator.geolocation) return;
     const watchId = navigator.geolocation.watchPosition(
-      (position) => setUserLocation([position.coords.latitude, position.coords.longitude]),
+      (position) => {
+        setUserLocation([position.coords.latitude, position.coords.longitude]);
+        if (typeof position.coords.accuracy === 'number' && Number.isFinite(position.coords.accuracy)) {
+          setUserAccuracy(position.coords.accuracy);
+        }
+      },
       () => { /* The locate button can retry if permission is lost. */ },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 },
     );
@@ -525,6 +558,9 @@ export default function App() {
     const watchId = navigator.geolocation.watchPosition(
       (position) => {
         setUserLocation([position.coords.latitude, position.coords.longitude]);
+        if (typeof position.coords.accuracy === 'number' && Number.isFinite(position.coords.accuracy)) {
+          setUserAccuracy(position.coords.accuracy);
+        }
       },
       (error) => {
         if (error.code === error.PERMISSION_DENIED) {
@@ -639,6 +675,9 @@ export default function App() {
       (position) => {
         const point: LatLng = [position.coords.latitude, position.coords.longitude];
         setUserLocation(point);
+        if (typeof position.coords.accuracy === 'number' && Number.isFinite(position.coords.accuracy)) {
+          setUserAccuracy(position.coords.accuracy);
+        }
         setFlyTo(point);
         setLocationBusy(false);
         onSuccess?.(point);
@@ -788,6 +827,7 @@ export default function App() {
       }
 
       setRouteChoices(choices);
+      setRoutePanelMinimized(false);
       setSelectedRouteKind('shortest-safest');
       setRoutePreview(choices.find((choice) => choice.kind === 'shortest-safest')?.route ?? choices[0]?.route ?? null);
       setRouteOrigin(start);
@@ -996,6 +1036,9 @@ export default function App() {
       (position) => {
         const point: LatLng = [position.coords.latitude, position.coords.longitude];
         setUserLocation(point);
+        if (typeof position.coords.accuracy === 'number' && Number.isFinite(position.coords.accuracy)) {
+          setUserAccuracy(position.coords.accuracy);
+        }
         setSosConfirmPoint(point);
         setLocationBusy(false);
       },
@@ -1198,6 +1241,7 @@ export default function App() {
   function clearRoute() {
     setRoutePreview(null);
     setRouteChoices([]);
+    setRoutePanelMinimized(false);
     setRouteOrigin(null);
     setRouteDestination(null);
     setRouteError('');
@@ -1230,7 +1274,12 @@ export default function App() {
         <Onboarding onComplete={handleAuthComplete} onSkip={handleSkipOnboarding} />
       )}
       {!showOnboarding && (
-    <main className={`app-shell ${mapMode !== 'idle' ? 'map-picking' : ''} ${showUnsafeAlert ? 'unsafe-alert-visible' : ''}`} data-theme={theme}>
+    <main
+      className={`app-shell ${mapMode !== 'idle' ? 'map-picking' : ''} ${showUnsafeAlert ? 'unsafe-alert-visible' : ''} ${
+        routeChoices.length > 0 ? (routePanelMinimized ? 'route-active route-minimized' : 'route-active route-expanded') : ''
+      }`}
+      data-theme={theme}
+    >
       <MapContainer
         className="map-canvas"
         center={userLocation ?? lastKnownLocation ?? DEFAULT_CENTER}
@@ -1277,8 +1326,16 @@ export default function App() {
           <Circle
             key={`unsafe-zone-${report.id}`}
             center={report.position}
-            radius={UNSAFE_RADIUS_METERS}
-            pathOptions={{ color: '#dc2626', weight: 1, fillColor: '#dc2626', fillOpacity: 0.12 }}
+            radius={getReportSafetyRadius(report)}
+            pathOptions={{
+              color: '#ef4444',
+              weight: 1.5,
+              dashArray: '5, 5',
+              opacity: 0.65,
+              fillColor: '#dc2626',
+              fillOpacity: 0.08,
+              className: 'unsafe-safety-zone',
+            }}
           />
         ))}
 
@@ -1286,12 +1343,12 @@ export default function App() {
           <CircleMarker
             key={report.id}
             center={report.position}
-            radius={unsafeReportIds.has(report.id) ? 11 : 8}
+            radius={unsafeReportIds.has(report.id) ? 10 : 7.5}
             pathOptions={{
               color: '#ffffff',
-              weight: unsafeReportIds.has(report.id) ? 3 : 2.5,
-              fillColor: REPORT_COLORS[report.category],
-              fillOpacity: 0.96,
+              weight: unsafeReportIds.has(report.id) ? 2.5 : 2,
+              fillColor: REPORT_COLORS[report.category] || '#68758a',
+              fillOpacity: 0.95,
               className: unsafeReportIds.has(report.id) ? 'unsafe-report-marker' : undefined,
             }}
           >
@@ -1371,9 +1428,52 @@ export default function App() {
 
         {userLocation && (
           <>
-            <CircleMarker center={userLocation} radius={13} pathOptions={{ color: '#ffffff', weight: 3, fillColor: '#4189ed', fillOpacity: 0.2 }} />
-            <CircleMarker center={userLocation} radius={6} pathOptions={{ color: '#ffffff', weight: 2, fillColor: '#2877e8', fillOpacity: 1 }}>
-              <Popup><div className="map-popup"><strong>Your current location</strong><small>{formatCoordinate(userLocation)}</small></div></Popup>
+            {userAccuracy != null && userAccuracy > 0 && (
+              <Circle
+                center={userLocation}
+                radius={Math.max(15, Math.min(userAccuracy, 1500))}
+                pathOptions={{
+                  color: '#2563eb',
+                  weight: 1,
+                  dashArray: '4, 4',
+                  opacity: 0.45,
+                  fillColor: '#3b82f6',
+                  fillOpacity: 0.06,
+                  className: 'user-location-accuracy-circle',
+                }}
+              />
+            )}
+            <CircleMarker
+              center={userLocation}
+              radius={10}
+              pathOptions={{
+                color: '#ffffff',
+                weight: 1.5,
+                fillColor: '#3b82f6',
+                fillOpacity: 0.22,
+                className: 'user-location-halo',
+              }}
+            />
+            <CircleMarker
+              center={userLocation}
+              radius={5.5}
+              pathOptions={{
+                color: '#ffffff',
+                weight: 2,
+                fillColor: '#1d4ed8',
+                fillOpacity: 1,
+              }}
+            >
+              <Popup>
+                <div className="map-popup">
+                  <div className="popup-kicker">You are here</div>
+                  <strong>Current location</strong>
+                  <small className="popup-coordinate">{formatCoordinate(userLocation)}</small>
+                  {userAccuracy != null && (
+                    <small>Accuracy: &plusmn;{Math.round(userAccuracy)} m</small>
+                  )}
+                </div>
+              </Popup>
             </CircleMarker>
           </>
         )}
@@ -1757,71 +1857,172 @@ export default function App() {
         </section>
       )}
 
+      {routeChoices.length > 0 && !routePanelMinimized && (
+        <div
+          className="route-panel-backdrop"
+          onClick={() => setRoutePanelMinimized(true)}
+          aria-hidden="true"
+          title="Click background to minimize route comparison"
+        />
+      )}
+
       {routeChoices.length > 0 && (
-        <section className="route-summary route-options-panel" aria-label="Route options and directions">
-          <div className="route-summary-top"><span className="route-summary-icon"><RouteIcon size={17} /></span><div><strong>Compare route options</strong><small>{routeChoices.filter((choice) => choice.route).length} alternative route(s) returned</small></div><button type="button" aria-label="Close routes" onClick={clearRoute}><X size={17} /></button></div>
-          <div className="route-choice-list">
-            {routeChoices.map((choice) => (
-              <button key={choice.kind} type="button" disabled={!choice.route} className={`route-choice ${selectedRouteKind === choice.kind && routePreview ? 'route-choice-active' : ''} ${choice.route && choice.route.nearbyReportCount > 0 ? 'route-choice-reported' : ''}`} onClick={() => selectRouteChoice(choice)}>
-                <span className="route-choice-copy">
-                  <strong>{choice.title} {choice.route && choice.route.nearbyReportCount > 0 && <span className="route-reported-tag"><AlertTriangle size={11} /> Reported zone</span>}</strong>
-                  <small>{choice.route ? choice.subtitle : choice.kind === 'shortest-higher-risk' ? 'No route with higher reported exposure was identified.' : 'The routing service did not return another distinct low-exposure path.'}</small>
-                </span>
-                {choice.route ? <span className="route-choice-metric"><strong>{formatDistance(choice.route.distanceMeters)}</strong><small>{formatDuration(choice.route.durationSeconds)}</small><small>{choice.route.nearbyReportCount} report{choice.route.nearbyReportCount === 1 ? '' : 's'} on path</small></span> : <span className="route-unavailable">Unavailable</span>}
-              </button>
-            ))}
-          </div>
-          {routePreview && (
+        <section
+          className={`route-summary route-options-panel ${routePanelMinimized ? 'route-options-panel-minimized' : ''}`}
+          aria-label="Route options and directions"
+        >
+          {routePanelMinimized ? (
+            <div className="route-minimized-content">
+              <div
+                className="route-minimized-main"
+                onClick={() => setRoutePanelMinimized(false)}
+                role="button"
+                tabIndex={0}
+                title="Click to expand route comparison"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') setRoutePanelMinimized(false);
+                }}
+              >
+                <span className="route-summary-icon"><RouteIcon size={16} /></span>
+                <div className="route-minimized-copy">
+                  <div className="route-minimized-title">
+                    <strong>
+                      {routeChoices.find((c) => c.kind === selectedRouteKind)?.title.replace(' available route', '').replace(' alternative', '') || 'Route preview'}
+                    </strong>
+                    {routePreview && (
+                      <span className="route-minimized-badge">
+                        {formatDistance(routePreview.distanceMeters)} · {formatDuration(routePreview.durationSeconds)}
+                      </span>
+                    )}
+                  </div>
+                  <small className="route-minimized-hint">
+                    {routeChoices.filter((choice) => choice.route).length} routes available · Tap to expand
+                  </small>
+                </div>
+              </div>
+              <div className="route-header-actions">
+                <button
+                  type="button"
+                  className="route-header-btn"
+                  aria-label="Expand route options"
+                  title="Expand route comparison"
+                  onClick={() => setRoutePanelMinimized(false)}
+                >
+                  <ChevronUp size={17} />
+                </button>
+                <button
+                  type="button"
+                  className="route-header-btn route-header-btn-close"
+                  aria-label="Close routes"
+                  title="Clear route"
+                  onClick={clearRoute}
+                >
+                  <X size={17} />
+                </button>
+              </div>
+            </div>
+          ) : (
             <>
-              <div className="route-detail-heading">
-                <strong>{routePreview.summary || 'Directions'}</strong>
-                <span>{formatDistance(routePreview.distanceMeters)} · {formatDuration(routePreview.durationSeconds)}</span>
+              <div className="route-summary-top">
+                <span className="route-summary-icon"><RouteIcon size={17} /></span>
+                <div
+                  className="route-summary-title-area"
+                  onClick={() => setRoutePanelMinimized(true)}
+                  title="Click to minimize (view map)"
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') setRoutePanelMinimized(true);
+                  }}
+                >
+                  <strong>Compare route options</strong>
+                  <small>{routeChoices.filter((choice) => choice.route).length} alternative route(s) returned · Tap to minimize</small>
+                </div>
+                <div className="route-header-actions">
+                  <button
+                    type="button"
+                    className="route-header-btn"
+                    aria-label="Minimize route options"
+                    title="Minimize card to view map"
+                    onClick={() => setRoutePanelMinimized(true)}
+                  >
+                    <ChevronDown size={18} />
+                  </button>
+                  <button
+                    type="button"
+                    className="route-header-btn route-header-btn-close"
+                    aria-label="Close routes"
+                    title="Clear route"
+                    onClick={clearRoute}
+                  >
+                    <X size={17} />
+                  </button>
+                </div>
               </div>
-              {routePreview.safetyIndicator && (
-                <div style={{ margin: '6px 0 10px', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-                  <span className={`route-safety-badge ${routePreview.safetyIndicator.risk_level}`}>
-                    Risk: {routePreview.safetyIndicator.risk_level.toUpperCase()} ({routePreview.safetyIndicator.overall_risk_score.toFixed(1)}/100)
-                  </span>
-                  {routePreview.safetyIndicator.safe_haven_count > 0 && (
-                    <span className="route-safety-badge low">
-                      <Shield size={12} /> {routePreview.safetyIndicator.safe_haven_count} safe haven(s) on route
+              <div className="route-choice-list">
+                {routeChoices.map((choice) => (
+                  <button key={choice.kind} type="button" disabled={!choice.route} className={`route-choice ${selectedRouteKind === choice.kind && routePreview ? 'route-choice-active' : ''} ${choice.route && choice.route.nearbyReportCount > 0 ? 'route-choice-reported' : ''}`} onClick={() => selectRouteChoice(choice)}>
+                    <span className="route-choice-copy">
+                      <strong>{choice.title} {choice.route && choice.route.nearbyReportCount > 0 && <span className="route-reported-tag"><AlertTriangle size={11} /> Reported zone</span>}</strong>
+                      <small>{choice.route ? choice.subtitle : choice.kind === 'shortest-higher-risk' ? 'No route with higher reported exposure was identified.' : 'The routing service did not return another distinct low-exposure path.'}</small>
                     </span>
-                  )}
-                </div>
-              )}
-              {routePreview.safetyIndicator?.observations && routePreview.safetyIndicator.observations.length > 0 && (
-                <div className="route-observations">
-                  <strong>Safety Engine Observations:</strong>
-                  <ul>
-                    {routePreview.safetyIndicator.observations.map((obs, idx) => (
-                      <li key={idx}>{obs}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              <ol className="direction-list">
-                {routePreview.steps.length ? routePreview.steps.map((step) => (
-                  <li key={step.id}><span className="direction-step-icon"><RouteIcon size={13} /></span><span className="direction-step-copy"><strong>{step.instruction}</strong><small>{formatDistance(step.distanceMeters)} · {formatDuration(step.durationSeconds)}</small></span></li>
-                )) : <li><span className="direction-step-copy"><strong>Turn-by-turn steps were not provided.</strong><small>Use the route preview as a map reference only.</small></span></li>}
-              </ol>
-              {routePreview.nearbyReportCount > 0 && (
-                <div className="route-reported-warning">
-                  <AlertTriangle size={15} />
-                  <span>
-                    This route passes <strong>{routePreview.nearbyReportCount} reported unsafe zone{routePreview.nearbyReportCount === 1 ? '' : 's'}</strong> (within 250 m). Choose a route marked “avoids reports” when one is available.
-                  </span>
-                </div>
-              )}
-              <div className="route-risk-note">
-                <AlertTriangle size={14} />
-                <span>
-                  {routePreview.nearbyReportCount > 0
-                    ? 'Risk is raised to HIGH because reports are on this path, regardless of other safety factors.'
-                    : routePreview.isBackendRanked
-                      ? `Scored by SafeRoute engine against community reports, safe havens, and day/night lighting models.`
-                      : 'No community reports were detected within 250 m of this route.'}
-                </span>
+                    {choice.route ? <span className="route-choice-metric"><strong>{formatDistance(choice.route.distanceMeters)}</strong><small>{formatDuration(choice.route.durationSeconds)}</small><small>{choice.route.nearbyReportCount} report{choice.route.nearbyReportCount === 1 ? '' : 's'} on path</small></span> : <span className="route-unavailable">Unavailable</span>}
+                  </button>
+                ))}
               </div>
+              {routePreview && (
+                <>
+                  <div className="route-detail-heading">
+                    <strong>{routePreview.summary || 'Directions'}</strong>
+                    <span>{formatDistance(routePreview.distanceMeters)} · {formatDuration(routePreview.durationSeconds)}</span>
+                  </div>
+                  {routePreview.safetyIndicator && (
+                    <div style={{ margin: '6px 0 10px', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                      <span className={`route-safety-badge ${routePreview.safetyIndicator.risk_level}`}>
+                        Risk: {routePreview.safetyIndicator.risk_level.toUpperCase()} ({routePreview.safetyIndicator.overall_risk_score.toFixed(1)}/100)
+                      </span>
+                      {routePreview.safetyIndicator.safe_haven_count > 0 && (
+                        <span className="route-safety-badge low">
+                          <Shield size={12} /> {routePreview.safetyIndicator.safe_haven_count} safe haven(s) on route
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {routePreview.safetyIndicator?.observations && routePreview.safetyIndicator.observations.length > 0 && (
+                    <div className="route-observations">
+                      <strong>Safety Engine Observations:</strong>
+                      <ul>
+                        {routePreview.safetyIndicator.observations.map((obs, idx) => (
+                          <li key={idx}>{obs}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  <ol className="direction-list">
+                    {routePreview.steps.length ? routePreview.steps.map((step) => (
+                      <li key={step.id}><span className="direction-step-icon"><RouteIcon size={13} /></span><span className="direction-step-copy"><strong>{step.instruction}</strong><small>{formatDistance(step.distanceMeters)} · {formatDuration(step.durationSeconds)}</small></span></li>
+                    )) : <li><span className="direction-step-copy"><strong>Turn-by-turn steps were not provided.</strong><small>Use the route preview as a map reference only.</small></span></li>}
+                  </ol>
+                  {routePreview.nearbyReportCount > 0 && (
+                    <div className="route-reported-warning">
+                      <AlertTriangle size={15} />
+                      <span>
+                        This route passes <strong>{routePreview.nearbyReportCount} reported unsafe zone{routePreview.nearbyReportCount === 1 ? '' : 's'}</strong> (within 250 m). Choose a route marked “avoids reports” when one is available.
+                      </span>
+                    </div>
+                  )}
+                  <div className="route-risk-note">
+                    <AlertTriangle size={14} />
+                    <span>
+                      {routePreview.nearbyReportCount > 0
+                        ? 'Risk is raised to HIGH because reports are on this path, regardless of other safety factors.'
+                        : routePreview.isBackendRanked
+                          ? `Scored by SafeRoute engine against community reports, safe havens, and day/night lighting models.`
+                          : 'No community reports were detected within 250 m of this route.'}
+                    </span>
+                  </div>
+                </>
+              )}
             </>
           )}
         </section>

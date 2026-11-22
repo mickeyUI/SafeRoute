@@ -24,6 +24,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  Circle,
   CircleMarker,
   MapContainer,
   Polyline,
@@ -153,6 +154,7 @@ export default function App() {
   const [searchMarker, setSearchMarker] = useState<LatLng | null>(null);
   const [flyTo, setFlyTo] = useState<LatLng | null>(null);
   const [userLocation, setUserLocation] = useState<LatLng | null>(null);
+  const [userAccuracy, setUserAccuracy] = useState<number | null>(null);
   const [locationBusy, setLocationBusy] = useState(false);
   const [notice, setNotice] = useState('');
 
@@ -243,6 +245,9 @@ export default function App() {
       (position) => {
         const point: LatLng = [position.coords.latitude, position.coords.longitude];
         setUserLocation(point);
+        if (typeof position.coords.accuracy === 'number' && Number.isFinite(position.coords.accuracy)) {
+          setUserAccuracy(position.coords.accuracy);
+        }
         setFlyTo(point);
         setLocationBusy(false);
         onSuccess?.(point);
@@ -659,9 +664,52 @@ export default function App() {
 
         {userLocation && (
           <>
-            <CircleMarker center={userLocation} radius={13} pathOptions={{ color: '#ffffff', weight: 3, fillColor: '#4189ed', fillOpacity: 0.2 }} />
-            <CircleMarker center={userLocation} radius={6} pathOptions={{ color: '#ffffff', weight: 2, fillColor: '#2877e8', fillOpacity: 1 }}>
-              <Popup><div className="map-popup"><strong>Your current location</strong><small>{formatCoordinate(userLocation)}</small></div></Popup>
+            {userAccuracy != null && userAccuracy > 0 && (
+              <Circle
+                center={userLocation}
+                radius={Math.max(15, Math.min(userAccuracy, 1500))}
+                pathOptions={{
+                  color: '#2563eb',
+                  weight: 1,
+                  dashArray: '4, 4',
+                  opacity: 0.45,
+                  fillColor: '#3b82f6',
+                  fillOpacity: 0.06,
+                  className: 'user-location-accuracy-circle',
+                }}
+              />
+            )}
+            <CircleMarker
+              center={userLocation}
+              radius={10}
+              pathOptions={{
+                color: '#ffffff',
+                weight: 1.5,
+                fillColor: '#3b82f6',
+                fillOpacity: 0.22,
+                className: 'user-location-halo',
+              }}
+            />
+            <CircleMarker
+              center={userLocation}
+              radius={5.5}
+              pathOptions={{
+                color: '#ffffff',
+                weight: 2,
+                fillColor: '#1d4ed8',
+                fillOpacity: 1,
+              }}
+            >
+              <Popup>
+                <div className="map-popup">
+                  <div className="popup-kicker">You are here</div>
+                  <strong>Current location</strong>
+                  <small className="popup-coordinate">{formatCoordinate(userLocation)}</small>
+                  {userAccuracy != null && (
+                    <small>Accuracy: &plusmn;{Math.round(userAccuracy)} m</small>
+                  )}
+                </div>
+              </Popup>
             </CircleMarker>
           </>
         )}
