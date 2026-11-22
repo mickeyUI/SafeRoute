@@ -50,6 +50,15 @@ a map, and refreshes every 15 seconds until the link expires or sharing is stopp
 It needs no login. Vite and the Render static-site rewrite both serve `index.html`
 for unknown paths, so the URL also works on a direct browser refresh.
 
+The SOS also saves the coordinate locally and sends it as the first journey check-in,
+then pushes a new check-in every 15 seconds while sharing is active. The SMS contains
+both the live tracking link and a Google Maps link built from the saved coordinate.
+The tracking page has an **Open in Google Maps** action that is rebuilt from the latest
+check-in on every refresh, so it always opens Google Maps at the newest saved position.
+A plain Google Maps URL cannot stream a second person's location continuously; Google's
+own "Location sharing" (with a Google account) is required for that. The in-app tracking
+page is the live view.
+
 The SMS message uses `VITE_PUBLIC_APP_ORIGIN` (when set) as the link origin. Set it to
 the publicly deployed frontend URL; otherwise `window.location.origin` is used, which
 produces unusable `localhost` links during local development. The deployed backend

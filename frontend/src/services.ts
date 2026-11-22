@@ -8,6 +8,15 @@ import type {
   NearbySosAlert,
 } from './types';
 import { getToken } from './auth';
+import { buildTrackPath } from './shareLinks';
+
+export {
+  buildGoogleMapsUrl,
+  buildTrackPath,
+  getTrackTokenFromPath,
+  normalizeShareToken,
+  TRACK_PATH_PREFIX,
+} from './shareLinks';
 
 const DEFAULT_API_BASE_URL = 'https://saferoute-ezbz.onrender.com/api/v1';
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE_URL;
@@ -15,19 +24,11 @@ const PHOTON_ENDPOINT = import.meta.env.VITE_GEOCODING_ENDPOINT || 'https://phot
 const OSRM_ENDPOINT = import.meta.env.VITE_ROUTING_ENDPOINT || 'https://router.project-osrm.org/route/v1/driving';
 const CLIENT_ID_KEY = 'saferoute-client-id';
 
-/** Path served by the public tracking page (see SharedJourneyPage.tsx). */
-export const TRACK_PATH_PREFIX = '/track/';
-
 export class ApiError extends Error {
   constructor(message: string, public readonly status: number) {
     super(message);
     this.name = 'ApiError';
   }
-}
-
-/** Build the in-app path for a journey's public tracking page. */
-export function buildTrackPath(shareToken: string): string {
-  return `${TRACK_PATH_PREFIX}${encodeURIComponent(shareToken)}`;
 }
 
 /**
@@ -47,13 +48,6 @@ export function resolveAppUrl(pathOrUrl: string): string {
 
 export function buildTrackUrl(shareToken: string): string {
   return resolveAppUrl(buildTrackPath(shareToken));
-}
-
-/** Extract a share token from the tracking page URL. */
-export function getTrackTokenFromPath(pathname: string): string | null {
-  if (!pathname.startsWith(TRACK_PATH_PREFIX)) return null;
-  const token = pathname.slice(TRACK_PATH_PREFIX.length).split('/')[0];
-  return token ? decodeURIComponent(token) : null;
 }
 
 /** Stable per-device id so a user's own SOS alerts are not shown as someone else's. */

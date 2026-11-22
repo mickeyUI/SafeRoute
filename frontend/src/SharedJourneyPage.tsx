@@ -16,6 +16,7 @@ import {
   fetchSharedJourney,
   type SharedJourney,
 } from './services';
+import { buildGoogleMapsUrl } from './shareLinks';
 import type { LatLng } from './types';
 
 const REFRESH_MS = 15_000;
@@ -85,6 +86,14 @@ export default function SharedJourneyPage({ token }: { token: string }) {
   const origin = useMemo(() => toLatLng(journey?.origin), [journey]);
   const destination = useMemo(() => toLatLng(journey?.destination), [journey]);
   const lastCheckin = useMemo(() => toLatLng(journey?.last_checkin), [journey]);
+
+  // Rebuilt on every poll, so this always points Google Maps at the most
+  // recently saved coordinate rather than a stale position from the SMS.
+  const livePoint = lastCheckin ?? origin ?? destination;
+  const googleMapsUrl = livePoint ? buildGoogleMapsUrl(livePoint) : null;
+  const livePointLabel = livePoint
+    ? `${livePoint[0].toFixed(5)}, ${livePoint[1].toFixed(5)}`
+    : null;
 
   const routePoints = useMemo(
     () => (journey?.route_coordinates ?? [])
@@ -196,8 +205,20 @@ export default function SharedJourneyPage({ token }: { token: string }) {
               <button type="button" className="track-button" onClick={() => void copyLink()}>
                 {copied ? <Check size={15} /> : <Copy size={15} />} {copied ? 'Copied' : 'Copy link'}
               </button>
+              {googleMapsUrl && (
+                <a className="track-button" href={googleMapsUrl} target="_blank" rel="noreferrer">
+                  <Navigation size={15} /> Open in Google Maps
+                </a>
+              )}
               <a className="track-button" href="/">Open SafeRoute</a>
             </div>
+
+            {googleMapsUrl && (
+              <p className="track-note">
+                Google Maps opens at the latest saved coordinate ({livePointLabel}).
+                This page refreshes every 15 seconds for live updates.
+              </p>
+            )}
 
             <p className="track-footnote">
               Updates automatically every 15 seconds. Location is shared only while

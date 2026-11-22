@@ -74,6 +74,7 @@ import {
   type RouteChoice,
   type RouteChoiceKind,
 } from './services';
+import { buildGoogleMapsUrl, buildTrackPath } from './shareLinks';
 import {
   filterSafePlaces,
   SAFE_PLACE_FILTERS,
@@ -125,6 +126,7 @@ interface SosResult {
   journeyId?: string;
   sharePath?: string;
   shareUrl?: string;
+  googleMapsUrl: string;
   smsUrl?: string;
   contactName?: string;
   contactPhone?: string;
@@ -218,10 +220,6 @@ function readGpsPoint(): Promise<LatLng> {
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 10000 },
     );
   });
-}
-
-function mapsLink(point: LatLng): string {
-  return `https://www.google.com/maps?q=${point[0]},${point[1]}`;
 }
 
 /** Straight-line distance between two points in metres (good enough for nearby alerts). */
@@ -1011,13 +1009,18 @@ export default function App() {
     );
   }
 
-  /** Second tap: broadcast the alert, create the tracking link, hand off the SMS. */
+  /** Second tap: save the coordinate, broadcast the alert, build links, hand off the SMS. */
   async function dispatchSos(
     position: LatLng,
     reason: string,
     details: { voiceAttached?: boolean; pictureName?: string } = {},
   ) {
     setSosSending(true);
+
+    // Keep the emergency coordinate on this device before any network call so
+    // the last known position survives a reload, even if the backend is offline.
+    saveLastLocation(position);
+
     let shareInfo: Awaited<ReturnType<typeof triggerBackendSos>> | undefined;
     try {
       shareInfo = await triggerBackendSos(position, reason, {
@@ -1028,15 +1031,20 @@ export default function App() {
       console.warn('Backend SOS broadcast failed:', err);
     }
 
-    const sharePath = shareInfo?.shareUrl;
-    const shareUrl = sharePath ? buildTrackUrl(sharePath) : mapsLink(position);
+    // buildTrackUrl() needs the RAW token. Passing the already-built
+    // `/track/share_x` path produced the broken /track/%2Ftrack%2Fshare_x link.
+    const shareToken = shareInfo?.shareToken;
+    const sharePath = shareToken ? buildTrackPath(shareToken) : undefined;
+    const shareUrl = shareToken ? buildTrackUrl(shareToken) : undefined;
+    const googleMapsUrl = buildGoogleMapsUrl(position);
     const contactName = userPreferences?.emergencyContactName?.trim() || 'my emergency contact';
     const contactPhone = userPreferences?.emergencyContactPhone?.trim() || '';
     const message = [
       'SAFEROUTE EMERGENCY ALERT',
       reason.trim() ? `Situation: ${reason.trim()}` : null,
       `I triggered an SOS at ${new Date().toLocaleString()}.`,
-      `Track my live location: ${shareUrl}`,
+      shareUrl ? `Track my live location: ${shareUrl}` : null,
+      `Google Maps: ${googleMapsUrl}`,
       `Coordinates: ${position[0].toFixed(5)}, ${position[1].toFixed(5)}`,
     ].filter(Boolean).join('\n');
     const smsUrl = contactPhone ? buildSmsUrl(contactPhone, message) : undefined;
@@ -1050,7 +1058,7 @@ export default function App() {
       pictureName: details.pictureName,
       status: shareInfo?.alertId ? 'Emergency Active' : 'Saved locally — demo only',
       journeyId: shareInfo?.journeyId,
-      shareToken: shareInfo?.shareToken,
+      shareToken,
       shareUrl: sharePath,
       alertId: shareInfo?.alertId,
     };
@@ -1062,7 +1070,8 @@ export default function App() {
       alertId: shareInfo?.alertId,
       journeyId: shareInfo?.journeyId,
       sharePath,
-      shareUrl,
+      shareUrl: shareUrl ?? googleMapsUrl,
+      googleMapsUrl,
       smsUrl,
       contactName: contactPhone ? contactName : undefined,
       contactPhone: contactPhone || undefined,
@@ -1923,6 +1932,12 @@ export default function App() {
               </div>
             )}
 
+            <div className="share-link-banner">
+              <strong>Google Maps link</strong>
+              <a href={sosResult.googleMapsUrl} target="_blank" rel="noreferrer">{sosResult.googleMapsUrl}</a>
+              <small>Opens Google Maps at the saved coordinate. The live tracking link above keeps updating while sharing is active.</small>
+            </div>
+
             {sosResult.smsUrl && (
               <a className="sos-sms-direct-btn sos-result-sms-btn" href={sosResult.smsUrl}>
                 <MessageCircle size={14} />
@@ -1931,7 +1946,7 @@ export default function App() {
             )}
 
             <p className="sos-result-note">
-              In your SMS app, press <strong>Send</strong> to notify {sosResult.contactName || 'your emergency contact'}. They can then open the tracking link.
+              In your SMS app, press <strong>Send</strong> to notify {sosResult.contactName || 'your emergency contact'}. They can open the live tracking link or the Google Maps link from the message.
             </p>
 
             {sosResult.alertId && (
@@ -2022,9 +2037,14 @@ export default function App() {
                   {userPreferences?.emergencyContactPhone && (
                     <a
                       className="sos-sms-direct-btn"
-                      href={`sms:${userPreferences.emergencyContactPhone}?body=${encodeURIComponent(
-                        `SafeRoute Emergency Alert: Follow my live journey here: ${resolveAppUrl(lastSosShareUrl)}`
-                      )}`}
+                      href={buildSmsUrl(
+                        userPreferences.emergencyContactPhone || '',
+                        [
+                          'SAFEROUTE EMERGENCY ALERT',
+                          `Track my live location: ${resolveAppUrl(lastSosShareUrl)}`,
+                          sosResult?.googleMapsUrl ? `Google Maps: ${sosResult.googleMapsUrl}` : null,
+                        ].filter(Boolean).join('\n'),
+                      )}
                     >
                       <Phone size={13} />
                       <span>SMS tracking link to {userPreferences.emergencyContactName || 'emergency contact'}</span>
