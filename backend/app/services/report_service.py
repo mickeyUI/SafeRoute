@@ -11,24 +11,55 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import NotFoundError
 from app.core.geo import Coordinate, coords_from_geometry, point_from_coords
-from app.models.report import Report, ReportStatus
+from app.models.report import Report, ReportStatus, ReportType
 from app.models.user import User
 from app.repositories import reports as report_repo
 from app.schemas.report import ReportCreate, ReportRead
 from app.services.safety.scorer import ReportSample
 
+# The database keeps a small legacy `type` enum for the scoring engine, while
+# `category` stores the full value used by the API and map UI.
+CATEGORY_TO_TYPE: dict[str, ReportType] = {
+    "harassment": ReportType.harassment,
+    "poor_street_lighting": ReportType.unsafe_lighting,
+    "suspicious_activity": ReportType.suspicious,
+}
+TYPE_TO_CATEGORY: dict[ReportType, str] = {
+    ReportType.harassment: "harassment",
+    ReportType.suspicious: "suspicious_activity",
+    ReportType.unsafe_lighting: "poor_street_lighting",
+}
 
-def create_report(db: Session, reporter_id: UUID, payload: ReportCreate) -> Report:
-    if payload.location is None:
+
+def category_value(payload: ReportCreate) -> str:
+    if payload.category is not None:
+        return payload.category.value
+    if payload.type is not None:
+        return TYPE_TO_CATEGORY.get(payload.type, "other")
+    return "other"
+
+
+def create_report(db: Session, reporter_id: UUID | None, payload: ReportCreate, report_id: UUID | None = None) -> Report:
+    if payload.location is not None:
+        coords = payload.location
+    elif payload.latitude is not None and payload.longitude is not None:
+        coords = [payload.longitude, payload.latitude]
+    else:
         raise ValueError("A report location is required")
+
+    category = category_value(payload)
     report = Report(
+        id=report_id,
         reporter_id=reporter_id,
-        type=payload.type,
+        type=payload.type or CATEGORY_TO_TYPE.get(category, ReportType.other),
+        category=category,
         severity=payload.severity,
         description=payload.description,
-        location=point_from_coords(payload.location),
-        occurred_at=payload.occurred_at,
-        status=ReportStatus.pending,
+        location=point_from_coords(coords),
+        occurred_at=payload.occurred_at or datetime.now(UTC),
+        # Live community reports are visible immediately, matching the existing
+        # in-memory behaviour used by the map and safety warnings.
+        status=ReportStatus.approved,
     )
     return report_repo.create(db, report)
 

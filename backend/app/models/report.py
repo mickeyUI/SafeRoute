@@ -32,10 +32,13 @@ class Report(TimestampMixin, Base):
     __table_args__ = (CheckConstraint("severity BETWEEN 1 AND 5", name="reports_severity_range"),)
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
-    reporter_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    reporter_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=True
     )
     type: Mapped[ReportType] = mapped_column(Enum(ReportType, name="report_type"), nullable=False)
+    # Full API category (hazard, theft, poor_street_lighting, ...). The `type`
+    # enum above is kept for backwards compatibility with the scoring engine.
+    category: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
     severity: Mapped[int] = mapped_column(Integer, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     location: Mapped[object] = mapped_column(

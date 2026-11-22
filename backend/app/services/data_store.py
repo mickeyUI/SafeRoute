@@ -574,12 +574,15 @@ class DataStore:
     # --- Incident Report Methods ---
     def create_report(self, report_in: ReportCreate, user_id: str | None = None) -> dict[str, Any]:
         report_id = str(uuid.uuid4())
+        latitude, longitude = report_in.latitude, report_in.longitude
+        if report_in.location:
+            longitude, latitude = float(report_in.location[0]), float(report_in.location[1])
         item = {
             "id": report_id,
             "user_id": None if report_in.is_anonymous else user_id,
             "category": report_in.category,
-            "latitude": report_in.latitude,
-            "longitude": report_in.longitude,
+            "latitude": latitude,
+            "longitude": longitude,
             "severity": report_in.severity,
             "description": report_in.description,
             "status": ModerationStatus.APPROVED,

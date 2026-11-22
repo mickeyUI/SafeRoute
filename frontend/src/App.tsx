@@ -424,8 +424,9 @@ export default function App() {
         if (backendReps.length) {
           setReports((prev) => {
             const map = new Map<string, SafetyReport>();
-            backendReps.forEach((r) => map.set(r.id, r));
             prev.forEach((r) => map.set(r.id, r));
+            // Backend data wins so status and sync state stay accurate.
+            backendReps.forEach((r) => map.set(r.id, r));
             return Array.from(map.values());
           });
         }
@@ -923,7 +924,7 @@ export default function App() {
       setNotice('Choose the incident location on the map first.');
       return;
     }
-    const localId = createId();
+    let reportId = createId();
     let backendSuccess = false;
     let reportStatus: 'Pending review' | 'Approved' = 'Pending review';
 
@@ -934,13 +935,14 @@ export default function App() {
         position: reportPoint,
       });
       backendSuccess = true;
+      reportId = res.id;
       if (res.status === 'approved') reportStatus = 'Approved';
     } catch (err) {
       console.warn('Backend submission error, saved locally:', err);
     }
 
     const report: SafetyReport = {
-      id: localId,
+      id: reportId,
       category: reportCategory,
       description: reportDescription.trim(),
       position: reportPoint,
@@ -1289,7 +1291,9 @@ export default function App() {
                 <div className={`popup-kicker ${unsafeReportIds.has(report.id) ? 'popup-danger' : ''}`}>
                   {unsafeReportIds.has(report.id)
                     ? 'Unsafe area · You are nearby'
-                    : report.status === 'Approved' ? 'Verified Community Report' : 'Community report · Pending review'}
+                    : report.isBackendSynced
+                      ? 'Shared community report'
+                      : 'On this device only · Pending sync'}
                 </div>
                 <strong>{report.category}</strong>
                 <p>{report.description || 'No additional description was provided.'}</p>
@@ -1738,8 +1742,8 @@ export default function App() {
                 <span key={category}><i style={{ background: REPORT_COLORS[category] }} />{category} · {destinationReports.filter((report) => report.category === category).length}</span>
               ))}
             </div>
-          ) : <p className="destination-no-reports">No saved reports were found in this browser around this destination.</p>}
-          <p className="destination-caveat">Reports are local to this browser and unverified. No reports does not mean a place is safe.</p>
+          ) : <p className="destination-no-reports">No reports were found around this destination yet.</p>}
+          <p className="destination-caveat">Reports are shared when the backend is online, but remain community reports and are not verified. No reports does not mean a place is safe.</p>
           <button className="destination-route-button" type="button" onClick={routeToSelectedPlace}><RouteIcon size={15} /> Plan a route here</button>
         </section>
       )}

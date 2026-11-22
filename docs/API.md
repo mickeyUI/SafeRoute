@@ -94,7 +94,7 @@ Unknown `travel_mode` or malformed coordinates return `422 validation_error`.
 
 | Method | Path | Auth | Description |
 | --- | --- | --- | --- |
-| POST | `/reports` | yes | Create a pending report (201) |
+| POST | `/reports` | no | Create a report; anonymous submissions are supported (201) |
 | GET | `/reports/nearby` | no | Reports within `radius_m` (default 1000) |
 | GET | `/reports/{report_id}` | no | One report |
 | PATCH | `/reports/{report_id}/moderate` | moderator | Set `approved` or `rejected` |
@@ -103,16 +103,19 @@ Create body:
 
 ```json
 {
-  "type": "harassment",
+  "category": "harassment",
   "severity": 4,
   "description": "Catcalling near the underpass, 3 people present.",
-  "location": [-122.4161, 37.7812],
-  "occurred_at": "2026-11-20T22:10:00Z"
+  "latitude": 9.0320,
+  "longitude": 38.7500,
+  "is_anonymous": true
 }
 ```
 
-New reports are `pending` and do not affect scores until moderated. The create
-endpoint is rate-limited by `RATE_LIMIT_PER_MINUTE`.
+Live map submissions are marked `approved` so nearby users see them immediately.
+Reports are written to the in-memory store and, when the database is available,
+persisted in PostGIS so they survive backend restarts. Anonymous reports have no
+`reporter_id`.
 
 ## Safe locations
 

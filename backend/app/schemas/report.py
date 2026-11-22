@@ -47,7 +47,7 @@ class ReportRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    reporter_id: UUID
+    reporter_id: UUID | None
     type: ReportType
     severity: int
     description: str | None = None
