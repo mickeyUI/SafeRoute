@@ -44,8 +44,10 @@ export function getTrackTokenFromPath(pathname: string): string | null {
   return token || null;
 }
 
-/** Google Maps link for a saved coordinate. Rebuilt from the latest check-in on refresh. */
+/**
+ * Short Google Maps link with the exact coordinate visible in the URL.
+ * Rebuilt from the latest check-in on refresh.
+ */
 export function buildGoogleMapsUrl(point: LatLng): string {
-  const query = `${point[0]},${point[1]}`;
-  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+  return `https://maps.google.com/?q=${point[0]},${point[1]}`;
 }
