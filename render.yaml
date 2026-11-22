@@ -62,3 +62,7 @@ services:
         value: https://photon.komoot.io/api/
       - key: VITE_ROUTING_ENDPOINT
         value: https://router.project-osrm.org/route/v1/driving
+      # Optional: public frontend origin used for SMS tracking links.
+      # Set this to the deployed frontend URL so phones don't receive localhost links.
+      # - key: VITE_PUBLIC_APP_ORIGIN
+      #   value: https://saferoute-frontend.onrender.com

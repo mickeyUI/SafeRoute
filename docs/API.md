@@ -138,6 +138,16 @@ Categories: `police`, `hospital`, `transit`, `shop`, `friend`, `other`.
 
 Invalid transitions return `409 invalid_state`.
 
+### Public shared journeys
+
+| Method | Path | Auth | Description |
+| --- | --- | --- | --- |
+| GET | `/shared/journeys/{share_token}` | no | Public tracking view for a shared journey token |
+
+Returns the journey status, origin/destination, estimated arrival, latest check-in,
+route coordinates, and `remaining_minutes`. Unknown/revoked tokens return `404`;
+expired tokens return `410`. The web client renders this at `/track/{share_token}`.
+
 ## Emergency SOS
 
 | Method | Path | Auth | Description |

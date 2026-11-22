@@ -79,6 +79,43 @@ def test_route_ranking_by_safety():
     # When speed is prioritized, the shorter route ranks first
     assert ranked_fast[0].route_id == "r_short_risky"
 
+def test_reported_route_corridor_is_high_risk_and_not_preferred():
+    from datetime import datetime, timezone
+    from app.schemas.route import GeoJSONLineString
+
+    now = datetime.now(timezone.utc)
+    # [longitude, latitude] along a straight corridor
+    coords = [[38.7500, 9.0350], [38.7600, 9.0350], [38.7700, 9.0350]]
+    far_report = {
+        "longitude": 38.7600, "latitude": 9.0600, "severity": 3,
+        "category": "hazard", "created_at": now,
+    }
+    near_report = {
+        "longitude": 38.7600, "latitude": 9.03505, "severity": 3,
+        "category": "harassment", "created_at": now,
+    }
+
+    clean_risk, clean_count, _ = safety_engine.calculate_incident_risk(coords, [far_report])
+    reported_risk, reported_count, _ = safety_engine.calculate_incident_risk(coords, [near_report])
+    assert clean_count == 0
+    assert reported_count == 1
+    assert reported_risk > clean_risk
+
+    # Even with safe havens nearby, a reported corridor stays high risk.
+    indicator = safety_engine.score_route(
+        "r_reported", "Market road", 1000, 750,
+        GeoJSONLineString(coordinates=coords),
+        [near_report],
+        [
+            {"longitude": 38.7550, "latitude": 9.0350, "name": "Police post"},
+            {"longitude": 38.7650, "latitude": 9.0350, "name": "Hospital"},
+        ],
+        departure_hour=12,
+    )
+    assert indicator.incident_count == 1
+    assert indicator.risk_level == "high"
+    assert indicator.overall_risk_score >= 75.0
+
 
 if __name__ == "__main__":
     test_haversine_distance()

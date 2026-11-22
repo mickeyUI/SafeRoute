@@ -21,12 +21,14 @@ npm run preview
 ## Main map interactions
 
 - **Destination search:** Expand the search field and search for a mapped venue, hotel, restaurant, public place, or address. Choose a result to center the map and review locally saved incident reports within 1 km. Photon searches OpenStreetMap place data; it is not an events calendar, so an event title is findable only when the venue/place is present in map data.
-- **GPS:** The location control asks the browser for permission and centers the map on the device's current location.
+- **GPS:** The app asks for the device position on startup and centers the map there. You can also use the location control at any time to re-check and recenter. A saved last-known position is used only as a fallback before GPS responds; it is never labeled as your current position.
 - **Route planning:** Use GPS or choose a starting point on the map, then choose a destination by search or map tap. The app requests route alternatives and displays up to three requested choices: shortest among low-reported-exposure routes, longest distinct low-reported-exposure route, and shortest distinct route with higher reported exposure. The selected path is drawn on the map and its available turn list appears in the same route overlay. There is intentionally no medium route option.
 - **Route availability:** The public routing service may return fewer than three distinct paths. Unavailable choices are shown as unavailable rather than inventing duplicate routes. If no route has greater saved-report exposure than the others, the higher-risk option stays unavailable.
 - **Route exposure estimate:** Routes are compared against reports saved in this browser, using category, distance from the path, and report age as rough weights. This is not a crime map or a validated safety model. Reports can be inaccurate, incomplete, duplicated, or unverified. The words “safest” and “higher reported risk” describe only relative local report signals, not actual safety.
-- **Report:** Press Report, tap the map to pin the location, choose a category, and optionally add a description or image. New reports appear as map markers and remain marked **Pending review**.
+- **Report:** Press Report, tap the map to pin the location, choose a category, and optionally add a description or image. New reports appear as map markers and remain marked **Pending review**. Reports are synced to the backend so other users see them too.
+- **Live safety alerts (unsafe-area warning):** Turn on **Safety alerts** in the right-side tools. While on, the app follows the device location and warns you as soon as you enter within 250 m of any reported road/area — "You may not be in a safe place". The warning shows the report categories, distance, a **Details** list, and a **Show on map** shortcut. It clears when you leave the area and appears again if you re-enter. Location permission is required; the setting is remembered on this device.
 - **SOS:** One tap opens a confirmation prompt and starts GPS. Confirming immediately broadcasts the location to nearby SafeRoute users, creates a 3-hour live tracking link, and opens a prefilled SMS to the saved emergency contact (the user presses Send in their SMS app). The user can stop sharing with **I'm safe**. For a text reason, voice recording, or picture, choose **Add a reason, voice note or picture instead** before confirming. This demo does not contact emergency services.
+- **Safe places nearby:** When you feel unsafe, press the **Safe places** tool (or the shortcut inside the SOS panel). The app uses your last/current GPS position, searches a 5 km radius, and lists nearby hospitals, churches, cafés, police stations, and pharmacies with distance, opening hours, contact details, map preview, and directions. Category filters and a Google Maps fallback are included.
 - **Filters:** Toggle report categories and SOS markers without leaving the map.
 - **Themes:** Switch between five interface themes: Rose, Midnight, Ocean, Forest, and Lavender. The selected theme is saved in this browser. The underlying OpenStreetMap tile style remains the same.
 
@@ -36,10 +38,27 @@ The frontend is now fully integrated with the SafeRoute FastAPI backend:
 
 - **Safety Scoring & Route Comparison:** Route comparison calls `POST /api/v1/routes/compare`. The backend Safety Engine ranks routes using pedestrian corridors, verified safe havens, and community incident reports with day/night lighting models. If the backend is unreachable, the frontend gracefully falls back to OSRM + local scoring.
 - **Verified Safe Havens:** Verified safe havens (police stations, 24/7 hospitals, verified shelters) are fetched dynamically via `GET /api/v1/locations/safe` and rendered on the map with custom green markers, popup details, contact numbers, and filter toggles.
-- **Incident Reports:** Community incident reports synchronize with `GET /api/v1/reports/nearby` and new reports are submitted to `POST /api/v1/reports`.
+- **Incident Reports:** Community incident reports synchronize with `GET /api/v1/reports/nearby` and new reports are submitted to `POST /api/v1/reports`. Live safety alerts compare your GPS position to these shared reports to warn about unsafe areas.
 - **SOS Emergency Alerting:** SOS alerts submit `POST /api/v1/reports`, initiate tracked journeys via `POST /api/v1/journeys`, generate a live shareable tracking token, and publish `POST /api/v1/sos/alerts`. Other clients poll `GET /api/v1/sos/alerts/nearby` and see active alerts as map markers. The app opens the device SMS app with the tracking link; browsers cannot send SMS without user confirmation unless an SMS gateway is added.
 - **Backend Health & Offline Mode:** The header indicates live backend connection status (`SafeRoute Engine Connected`). When offline, the app operates in offline local storage mode.
 
+## Live SOS tracking page
+
+Confirming an SOS creates a share token and a public link at `/track/<share_token>`.
+That page fetches `GET /api/v1/shared/journeys/<token>`, shows the latest check-in on
+a map, and refreshes every 15 seconds until the link expires or sharing is stopped.
+It needs no login. Vite and the Render static-site rewrite both serve `index.html`
+for unknown paths, so the URL also works on a direct browser refresh.
+
+The SMS message uses `VITE_PUBLIC_APP_ORIGIN` (when set) as the link origin. Set it to
+the publicly deployed frontend URL; otherwise `window.location.origin` is used, which
+produces unusable `localhost` links during local development. The deployed backend
+must include the SOS v2 endpoints (`/sos/alerts`, `/sos/alerts/nearby`) for nearby
+clients to discover an active alert.
+
+Nearby discovery uses the device's real position. If GPS has not responded yet, it
+uses the last position confirmed on this device. If neither exists, no nearby search
+is performed; a hard-coded city would otherwise make alerts in other areas invisible.
 
 ## External map services
 

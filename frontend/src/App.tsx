@@ -7,10 +7,14 @@ import {
   ArrowRight,
   Check,
   ChevronDown,
+  Church,
+  Coffee,
   Copy,
   Crosshair,
   Filter,
+  Hospital,
   ImagePlus,
+  Landmark,
   MessageCircle,
   Navigation,
   LocateFixed,
@@ -23,6 +27,7 @@ import {
   Plus,
   Palette,
   Phone,
+  Pill,
   Route as RouteIcon,
   Search,
   Send,
@@ -34,6 +39,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  Circle,
   CircleMarker,
   MapContainer,
   Polyline,
@@ -45,7 +51,9 @@ import {
 import {
   buildRouteChoices,
   buildSmsUrl,
+  buildTrackUrl,
   checkBackendHealth,
+  resolveAppUrl,
   compareRoutesWithBackend,
   fetchBackendReports,
   fetchBackendSafeLocations,
@@ -64,7 +72,21 @@ import {
   type RouteChoice,
   type RouteChoiceKind,
 } from './services';
-import { loadReports, loadSosRequests, saveReports, saveSosRequests } from './storage';
+import {
+  filterSafePlaces,
+  SAFE_PLACE_FILTERS,
+  safePlaceColor,
+  safePlaceLabel,
+  type SafePlaceFilter,
+} from './safePlaces';
+import {
+  loadLastLocation,
+  loadReports,
+  loadSosRequests,
+  saveLastLocation,
+  saveReports,
+  saveSosRequests,
+} from './storage';
 import {
   REPORT_CATEGORIES,
   type LatLng,
@@ -91,6 +113,8 @@ type Panel = 'report' | 'sos' | 'sos-confirm' | 'sos-result' | null;
 type ThemeId = 'rose' | 'midnight' | 'ocean' | 'forest' | 'lavender';
 
 const SOS_RADIUS_METERS = 2000;
+const UNSAFE_RADIUS_METERS = 250;
+const SAFETY_MONITOR_KEY = 'saferoute-safety-monitoring';
 
 interface SosResult {
   position: LatLng;
@@ -197,6 +221,36 @@ function mapsLink(point: LatLng): string {
   return `https://www.google.com/maps?q=${point[0]},${point[1]}`;
 }
 
+/** Straight-line distance between two points in metres (good enough for nearby alerts). */
+function distanceMeters(a: LatLng, b: LatLng): number {
+  const toRadians = (value: number) => (value * Math.PI) / 180;
+  const dLat = toRadians(b[0] - a[0]);
+  const dLng = toRadians(b[1] - a[1]);
+  const lat1 = toRadians(a[0]);
+  const lat2 = toRadians(b[0]);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+function getSavedSafetyMonitoring(): boolean {
+  try {
+    return localStorage.getItem(SAFETY_MONITOR_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function safePlaceIcon(category: string) {
+  switch (category) {
+    case 'hospital': return Hospital;
+    case 'church': return Church;
+    case 'cafe': return Coffee;
+    case 'police_station': return Landmark;
+    case 'pharmacy': return Pill;
+    default: return ShieldCheck;
+  }
+}
+
 export default function App() {
   // ── Auth & Preferences state ────────────────────────────────────────────
   const [currentUser, setCurrentUser] = useState<UserRead | null>(() => getCachedUser());
@@ -212,6 +266,9 @@ export default function App() {
   }, []);
 
   const handleSkipOnboarding = useCallback(() => {
+    // Onboarding may have saved preferences (including the emergency contact)
+    // even when the user chose to skip sign-in — pick them up here.
+    setUserPreferences(getPreferences() ?? null);
     setShowOnboarding(false);
   }, []);
 
@@ -268,8 +325,42 @@ export default function App() {
   const [routeError, setRouteError] = useState('');
   const [safeLocations, setSafeLocations] = useState<SafeLocation[]>([]);
   const [showSafeHavens, setShowSafeHavens] = useState(true);
+  const [safePlacesOpen, setSafePlacesOpen] = useState(false);
+  const [safePlacesLoading, setSafePlacesLoading] = useState(false);
+  const [safePlacesLocating, setSafePlacesLocating] = useState(false);
+  const [safePlacesCenter, setSafePlacesCenter] = useState<LatLng | null>(null);
+  const [safePlacesFilter, setSafePlacesFilter] = useState<SafePlaceFilter>('all');
+  const [safePlacesError, setSafePlacesError] = useState('');
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
   const [lastSosShareUrl, setLastSosShareUrl] = useState<string | null>(null);
+  const lastKnownLocation = useMemo(() => loadLastLocation(), []);
+
+  // Ask for the real device position once on startup. Without this, the map,
+  // nearby reports, and safe places silently use the demo center or a stale
+  // saved position, which makes "my location" look wrong.
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    let active = true;
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        if (!active) return;
+        const point: LatLng = [position.coords.latitude, position.coords.longitude];
+        setUserLocation(point);
+        setFlyTo(point);
+      },
+      () => {
+        // Keep the last known area until the user explicitly retries with the locate button.
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 },
+    );
+    return () => { active = false; };
+  }, []);
+
+  // Round to ~100 m so continuous GPS updates don't refetch backend data on every fix.
+  const backendSyncCenter = useMemo<LatLng | null>(() => {
+    const center = userLocation ?? lastKnownLocation;
+    return center ? [Number(center[0].toFixed(3)), Number(center[1].toFixed(3))] : null;
+  }, [userLocation, lastKnownLocation]);
 
   // ── One-tap SOS state ────────────────────────────────────────────────────
   const clientId = useMemo(() => getClientId(), []);
@@ -279,6 +370,16 @@ export default function App() {
   const [nearbySosAlerts, setNearbySosAlerts] = useState<NearbySosAlert[]>([]);
   const smsAutoOpenedRef = useRef(false);
 
+  // ── Unsafe-area warnings ────────────────────────────────────────────────
+  const [safetyMonitoring, setSafetyMonitoring] = useState(getSavedSafetyMonitoring);
+  const [unsafeNearbyReports, setUnsafeNearbyReports] = useState<SafetyReport[]>([]);
+  const [unsafeAlertDismissed, setUnsafeAlertDismissed] = useState(false);
+  const [unsafeDetailsOpen, setUnsafeDetailsOpen] = useState(false);
+  const watchIdRef = useRef<number | null>(null);
+  const warnedReportIdsRef = useRef<Set<string>>(new Set());
+  const lastUnsafeSignatureRef = useRef('');
+  const userLocationRef = useRef<LatLng | null>(null);
+
   useEffect(() => {
     let active = true;
     async function syncWithBackend() {
@@ -286,22 +387,11 @@ export default function App() {
       if (!active) return;
       setBackendOnline(health.online);
 
-      if (health.online) {
+      if (health.online && backendSyncCenter) {
         try {
-          const [backendHavens, backendReps] = await Promise.all([
-            fetchBackendSafeLocations(DEFAULT_CENTER, 25000),
-            fetchBackendReports(DEFAULT_CENTER, 25000),
-          ]);
+          const backendHavens = await fetchBackendSafeLocations(backendSyncCenter, 25000);
           if (!active) return;
           if (backendHavens.length) setSafeLocations(backendHavens);
-          if (backendReps.length) {
-            setReports((prev) => {
-              const map = new Map<string, SafetyReport>();
-              backendReps.forEach((r) => map.set(r.id, r));
-              prev.forEach((r) => map.set(r.id, r));
-              return Array.from(map.values());
-            });
-          }
         } catch (e) {
           console.warn('Backend sync error:', e);
         }
@@ -313,27 +403,146 @@ export default function App() {
       active = false;
       window.clearInterval(interval);
     };
-  }, []);
+  }, [backendSyncCenter]);
 
-  // Poll the backend for SOS alerts broadcast by other nearby users.
+  useEffect(() => { userLocationRef.current = userLocation; }, [userLocation]);
+
+  // Keep community reports fresh around the device so new reports from other
+  // users can trigger warnings as soon as they are picked up by the backend.
   useEffect(() => {
+    if (!backendOnline || !backendSyncCenter) return;
     let active = true;
-    async function loadNearbyAlerts() {
+    async function syncReports() {
+      const center = backendSyncCenter;
+      if (!center) return;
       try {
-        const alerts = await fetchNearbySosAlerts(userLocation ?? DEFAULT_CENTER, 25000);
+        const backendReps = await fetchBackendReports(center, 25000);
+        if (!active) return;
+        if (backendReps.length) {
+          setReports((prev) => {
+            const map = new Map<string, SafetyReport>();
+            backendReps.forEach((r) => map.set(r.id, r));
+            prev.forEach((r) => map.set(r.id, r));
+            return Array.from(map.values());
+          });
+        }
+      } catch (e) {
+        console.warn('Report sync error:', e);
+      }
+    }
+    void syncReports();
+    const interval = window.setInterval(syncReports, 15000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [backendOnline, backendSyncCenter]);
+
+  // Keep the last known position so nearby SOS discovery still works before GPS starts.
+  useEffect(() => {
+    if (userLocation) saveLastLocation(userLocation);
+  }, [userLocation]);
+
+  // Poll the backend for SOS alerts broadcast by other nearby users. Without a
+  // real position there is nowhere meaningful to search, so skip instead of
+  // querying a hard-coded city that would miss alerts everywhere else.
+  useEffect(() => {
+    const searchCenter = userLocation ?? lastKnownLocation;
+    if (!searchCenter) {
+      setNearbySosAlerts([]);
+      return;
+    }
+    let active = true;
+    const loadNearbyAlerts = async () => {
+      try {
+        const alerts = await fetchNearbySosAlerts(searchCenter, 25000);
         if (!active) return;
         setNearbySosAlerts(alerts.filter((alert) => alert.clientId !== clientId));
       } catch {
         // Offline mode: previously seen alerts remain until the next successful poll.
       }
-    }
+    };
     void loadNearbyAlerts();
     const interval = window.setInterval(loadNearbyAlerts, 12000);
     return () => {
       active = false;
       window.clearInterval(interval);
     };
-  }, [userLocation, clientId]);
+  }, [userLocation, lastKnownLocation, clientId]);
+
+  // Continuously follow the device while safety monitoring is on, so entering a
+  // reported road/area can be detected without the user tapping anything.
+  useEffect(() => {
+    if (!safetyMonitoring) {
+      if (watchIdRef.current !== null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+      warnedReportIdsRef.current.clear();
+      setUnsafeNearbyReports([]);
+      return;
+    }
+    if (!navigator.geolocation) {
+      setSafetyMonitoring(false);
+      setNotice('This browser does not support location tracking.');
+      return;
+    }
+
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        setUserLocation([position.coords.latitude, position.coords.longitude]);
+      },
+      (error) => {
+        if (error.code === error.PERMISSION_DENIED) {
+          setSafetyMonitoring(false);
+          setNotice('Location permission was not granted. Safety alerts are off.');
+        }
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 },
+    );
+    watchIdRef.current = watchId;
+
+    return () => {
+      navigator.geolocation?.clearWatch(watchId);
+      watchIdRef.current = null;
+    };
+  }, [safetyMonitoring]);
+
+  useEffect(() => {
+    try { localStorage.setItem(SAFETY_MONITOR_KEY, String(safetyMonitoring)); } catch { /* Preference stays in memory. */ }
+  }, [safetyMonitoring]);
+
+  // Warn when the device enters the radius of a community report.
+  useEffect(() => {
+    if (!safetyMonitoring || !userLocation) return;
+
+    const nearby = reports
+      .filter((report) => enabledCategories[report.category])
+      .map((report) => ({ report, distance: distanceMeters(userLocation, report.position) }))
+      .filter((item) => item.distance <= UNSAFE_RADIUS_METERS)
+      .sort((a, b) => a.distance - b.distance)
+      .map((item) => item.report);
+
+    const currentIds = new Set(nearby.map((report) => report.id));
+    const newlyEntered = nearby.filter((report) => !warnedReportIdsRef.current.has(report.id));
+    warnedReportIdsRef.current = currentIds;
+    setUnsafeNearbyReports(nearby);
+
+    // Reset a dismissed warning when the set of nearby reports changes.
+    const signature = nearby.map((report) => report.id).sort().join('|');
+    if (signature !== lastUnsafeSignatureRef.current) {
+      lastUnsafeSignatureRef.current = signature;
+      setUnsafeAlertDismissed(false);
+    }
+
+    if (newlyEntered.length > 0) {
+      const closest = newlyEntered[0];
+      const distance = distanceMeters(userLocation, closest.position);
+      setNotice(
+        `Unsafe area ahead: ${closest.category} reported ${formatDistance(distance)} from you.`,
+      );
+    }
+  }, [safetyMonitoring, userLocation, reports, enabledCategories]);
 
   useEffect(() => saveReports(reports), [reports]);
   useEffect(() => saveSosRequests(sosRequests), [sosRequests]);
@@ -357,37 +566,35 @@ export default function App() {
     () => reports.filter((report) => enabledCategories[report.category]),
     [reports, enabledCategories],
   );
+  const unsafeReportIds = useMemo(
+    () => new Set(unsafeNearbyReports.map((report) => report.id)),
+    [unsafeNearbyReports],
+  );
+
+  const knownSafePlacesCenter = safePlacesCenter ?? userLocation ?? lastKnownLocation;
+  const safePlacesSearchCenter = knownSafePlacesCenter ?? DEFAULT_CENTER;
+  const visibleSafePlaces = useMemo(() => {
+    const sorted = [...safeLocations].sort(
+      (a, b) => distanceMeters(safePlacesSearchCenter, a.position) - distanceMeters(safePlacesSearchCenter, b.position),
+    );
+    return filterSafePlaces(sorted, safePlacesFilter);
+  }, [safeLocations, safePlacesFilter, safePlacesSearchCenter]);
 
   const filteredCount = Object.values(enabledCategories).filter(Boolean).length;
   const destinationReports = useMemo(() => {
     if (!selectedPlace) return [];
-    const toRadians = (value: number) => (value * Math.PI) / 180;
-    const distanceMeters = (a: LatLng, b: LatLng) => {
-      const dLat = toRadians(b[0] - a[0]);
-      const dLng = toRadians(b[1] - a[1]);
-      const lat1 = toRadians(a[0]);
-      const lat2 = toRadians(b[0]);
-      const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
-      return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
-    };
     return reports.filter((report) => distanceMeters(selectedPlace.position, report.position) <= 1000);
   }, [selectedPlace, reports]);
 
   const destinationSafeHavens = useMemo(() => {
     if (!selectedPlace) return [];
-    const toRadians = (value: number) => (value * Math.PI) / 180;
-    const distanceMeters = (a: LatLng, b: LatLng) => {
-      const dLat = toRadians(b[0] - a[0]);
-      const dLng = toRadians(b[1] - a[1]);
-      const lat1 = toRadians(a[0]);
-      const lat2 = toRadians(b[0]);
-      const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
-      return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
-    };
     return safeLocations.filter((haven) => distanceMeters(selectedPlace.position, haven.position) <= 2500);
   }, [selectedPlace, safeLocations]);
 
-  function getCurrentLocation(onSuccess?: (point: LatLng) => void) {
+  function getCurrentLocation(
+    onSuccess?: (point: LatLng) => void,
+    onError?: (message: string) => void,
+  ) {
     if (!navigator.geolocation) {
       setNotice('This browser does not support device location. Choose a point on the map instead.');
       return;
@@ -419,8 +626,71 @@ export default function App() {
           ? 'Location permission was not granted. You can choose a point on the map.'
           : 'Could not get your location. Try again or choose a point on the map.';
         setNotice(message);
+        onError?.(message);
       },
       { enableHighAccuracy: true, timeout: 12000, maximumAge: 15000 },
+    );
+  }
+
+  async function loadSafePlacesAround(center: LatLng) {
+    setSafePlacesCenter(center);
+    setSafePlacesLocating(false);
+    setSafePlacesLoading(true);
+    setSafePlacesError('');
+    setFlyTo(center);
+    try {
+      const places = await fetchBackendSafeLocations(center, 5000);
+      setSafeLocations(places);
+      if (!places.length) {
+        setSafePlacesError('No verified safe places within 5 km. Use the map search link below.');
+      }
+    } catch {
+      setSafeLocations([]);
+      setSafePlacesError('Could not reach the safe-places service. Check your connection and try again.');
+    } finally {
+      setSafePlacesLoading(false);
+    }
+  }
+
+  function findSafePlaces() {
+    setSafePlacesOpen(true);
+    setSafePlacesFilter('all');
+    setShowSafeHavens(true);
+    setPanel(null);
+    setFilterOpen(false);
+    setSafeLocations([]);
+
+    const remembered = userLocationRef.current ?? lastKnownLocation;
+    if (remembered) {
+      void loadSafePlacesAround(remembered);
+      return;
+    }
+
+    setSafePlacesCenter(null);
+    setSafePlacesLoading(true);
+    setSafePlacesLocating(true);
+    setSafePlacesError('');
+    getCurrentLocation(
+      (point) => void loadSafePlacesAround(point),
+      (message) => {
+        setSafePlacesLoading(false);
+        setSafePlacesLocating(false);
+        setSafePlacesError(`${message} Allow location access or choose a point on the map first.`);
+      },
+    );
+  }
+
+  function toggleSafetyMonitoring() {
+    const next = !safetyMonitoring;
+    setSafetyMonitoring(next);
+    if (!next) {
+      setUnsafeAlertDismissed(false);
+      setUnsafeDetailsOpen(false);
+    }
+    setNotice(
+      next
+        ? 'Live safety alerts on — we’ll warn you when you enter a reported unsafe area.'
+        : 'Live safety alerts off.',
     );
   }
 
@@ -469,7 +739,7 @@ export default function App() {
       let isBackendScored = false;
 
       try {
-        choices = await compareRoutesWithBackend(start, end, 'safety');
+        choices = await compareRoutesWithBackend(start, end, 'safety', reports);
         if (choices.some((c) => c.route)) {
           isBackendScored = true;
         }
@@ -722,7 +992,7 @@ export default function App() {
     }
 
     const sharePath = shareInfo?.shareUrl;
-    const shareUrl = sharePath ? `${window.location.origin}${sharePath}` : mapsLink(position);
+    const shareUrl = sharePath ? buildTrackUrl(sharePath) : mapsLink(position);
     const contactName = userPreferences?.emergencyContactName?.trim() || 'my emergency contact';
     const contactPhone = userPreferences?.emergencyContactPhone?.trim() || '';
     const message = [
@@ -749,7 +1019,6 @@ export default function App() {
     };
     setSosRequests((current) => [request, ...current]);
     if (sharePath) setLastSosShareUrl(sharePath);
-    setUserLocation((current) => current ?? position);
     setSosResult({
       position,
       reason: reason.trim() || undefined,
@@ -884,6 +1153,12 @@ export default function App() {
 
   const emergencyContactName = userPreferences?.emergencyContactName?.trim() || 'my emergency contact';
   const emergencyContactPhone = userPreferences?.emergencyContactPhone?.trim();
+  const unsafeCategorySummary = (() => {
+    const categories = [...new Set(unsafeNearbyReports.map((report) => report.category))];
+    const shown = categories.slice(0, 2).join(', ');
+    return categories.length > 2 ? `${shown} +${categories.length - 2} more` : shown;
+  })();
+  const showUnsafeAlert = safetyMonitoring && unsafeNearbyReports.length > 0 && !unsafeAlertDismissed;
 
   const modeMessage = mapMode === 'report'
     ? 'Tap anywhere on the map to place the report marker'
@@ -901,10 +1176,10 @@ export default function App() {
         <Onboarding onComplete={handleAuthComplete} onSkip={handleSkipOnboarding} />
       )}
       {!showOnboarding && (
-    <main className={`app-shell ${mapMode !== 'idle' ? 'map-picking' : ''}`} data-theme={theme}>
+    <main className={`app-shell ${mapMode !== 'idle' ? 'map-picking' : ''} ${showUnsafeAlert ? 'unsafe-alert-visible' : ''}`} data-theme={theme}>
       <MapContainer
         className="map-canvas"
-        center={DEFAULT_CENTER}
+        center={userLocation ?? lastKnownLocation ?? DEFAULT_CENTER}
         zoom={6}
         minZoom={3}
         maxZoom={19}
@@ -925,13 +1200,13 @@ export default function App() {
             key={loc.id}
             center={loc.position}
             radius={9}
-            pathOptions={{ color: '#ffffff', weight: 2.5, fillColor: '#10b981', fillOpacity: 0.95 }}
+            pathOptions={{ color: '#ffffff', weight: 2.5, fillColor: safePlaceColor(loc.category), fillOpacity: 0.95 }}
           >
             <Popup>
               <div className="map-popup">
-                <div className="popup-kicker popup-safe">Verified Safe Haven · 24/7</div>
+                <div className="popup-kicker popup-safe">{safePlaceLabel(loc.category)}{loc.is24_7 ? ' · Open 24/7' : ''}</div>
                 <strong>{loc.name}</strong>
-                <p>{loc.description || 'Verified safe haven with 24/7 access.'}</p>
+                <p>{loc.description || `Verified ${safePlaceLabel(loc.category).toLowerCase()} nearby.`}</p>
                 {loc.contactPhone && (
                   <p className="popup-haven-phone">
                     <Phone size={12} />
@@ -944,17 +1219,34 @@ export default function App() {
           </CircleMarker>
         ))}
 
+        {safetyMonitoring && unsafeNearbyReports.map((report) => (
+          <Circle
+            key={`unsafe-zone-${report.id}`}
+            center={report.position}
+            radius={UNSAFE_RADIUS_METERS}
+            pathOptions={{ color: '#dc2626', weight: 1, fillColor: '#dc2626', fillOpacity: 0.12 }}
+          />
+        ))}
+
         {visibleReports.map((report) => (
           <CircleMarker
             key={report.id}
             center={report.position}
-            radius={8}
-            pathOptions={{ color: '#ffffff', weight: 2.5, fillColor: REPORT_COLORS[report.category], fillOpacity: 0.96 }}
+            radius={unsafeReportIds.has(report.id) ? 11 : 8}
+            pathOptions={{
+              color: '#ffffff',
+              weight: unsafeReportIds.has(report.id) ? 3 : 2.5,
+              fillColor: REPORT_COLORS[report.category],
+              fillOpacity: 0.96,
+              className: unsafeReportIds.has(report.id) ? 'unsafe-report-marker' : undefined,
+            }}
           >
             <Popup>
               <div className="map-popup">
-                <div className="popup-kicker">
-                  {report.status === 'Approved' ? 'Verified Community Report' : 'Community report · Pending review'}
+                <div className={`popup-kicker ${unsafeReportIds.has(report.id) ? 'popup-danger' : ''}`}>
+                  {unsafeReportIds.has(report.id)
+                    ? 'Unsafe area · You are nearby'
+                    : report.status === 'Approved' ? 'Verified Community Report' : 'Community report · Pending review'}
                 </div>
                 <strong>{report.category}</strong>
                 <p>{report.description || 'No additional description was provided.'}</p>
@@ -992,9 +1284,9 @@ export default function App() {
 
         {showSosMarkers && nearbySosAlerts.map((alert) => {
           const trackingUrl = alert.shareUrl
-            ? `${window.location.origin}${alert.shareUrl}`
+            ? resolveAppUrl(alert.shareUrl)
             : alert.shareToken
-              ? `${window.location.origin}/api/v1/shared/journeys/${alert.shareToken}`
+              ? buildTrackUrl(alert.shareToken)
               : null;
           return (
             <CircleMarker
@@ -1158,6 +1450,28 @@ export default function App() {
       </header>
 
       <div className="map-side-tools">
+        <button
+          className={`floating-tool safe-places-tool ${safePlacesOpen ? 'tool-active' : ''}`}
+          type="button"
+          title="Find safe places nearby"
+          aria-label="Find safe places nearby"
+          onClick={() => void findSafePlaces()}
+        >
+          <ShieldCheck size={18} />
+          <span className="tool-label">Safe places</span>
+        </button>
+        <button
+          className={`floating-tool safety-tool ${safetyMonitoring ? 'safety-tool-active' : ''}`}
+          type="button"
+          title={safetyMonitoring ? 'Turn off live safety alerts' : 'Turn on live safety alerts'}
+          aria-label={safetyMonitoring ? 'Turn off live safety alerts' : 'Turn on live safety alerts'}
+          aria-pressed={safetyMonitoring}
+          onClick={toggleSafetyMonitoring}
+        >
+          <Shield size={18} />
+          <span className="tool-label">Safety alerts</span>
+          <span className={`safety-tool-dot ${safetyMonitoring ? 'on' : ''}`} />
+        </button>
         <button className={`floating-tool ${themeOpen ? 'tool-active' : ''}`} type="button" title="Change theme" aria-label="Change theme" onClick={() => { setThemeOpen((open) => !open); setFilterOpen(false); }}>
           <Palette size={18} /><span className="tool-label">Theme</span>
         </button>
@@ -1219,11 +1533,144 @@ export default function App() {
         )}
       </div>
 
+      {safePlacesOpen && (
+        <section className="safe-places-panel">
+          <div className="safe-places-head">
+            <span className="panel-icon haven-icon"><ShieldCheck size={18} /></span>
+            <div>
+              <strong>Safe places nearby</strong>
+              <small>
+                {knownSafePlacesCenter
+                  ? `within 5 km of ${formatCoordinate(knownSafePlacesCenter)}`
+                  : 'waiting for your location…'}
+              </small>
+            </div>
+            <button
+              className="safe-places-refresh"
+              type="button"
+              title="Use my current location"
+              aria-label="Use my current location"
+              onClick={() => getCurrentLocation((point) => void loadSafePlacesAround(point))}
+            >
+              <LocateFixed size={15} />
+            </button>
+            <button className="close-panel" type="button" aria-label="Close safe places" onClick={() => setSafePlacesOpen(false)}><X size={16} /></button>
+          </div>
+
+          <div className="safe-place-filters">
+            {SAFE_PLACE_FILTERS.map((filter) => (
+              <button
+                key={filter.id}
+                type="button"
+                className={safePlacesFilter === filter.id ? 'safe-place-filter-active' : ''}
+                onClick={() => setSafePlacesFilter(filter.id)}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+
+          {safePlacesLoading ? (
+            <p className="safe-places-status">
+              <span className="spinner" />
+              {safePlacesLocating ? 'Getting your location…' : 'Finding safe places…'}
+            </p>
+          ) : (
+            <>
+              {safePlacesError && <p className="safe-places-error"><AlertTriangle size={13} /> {safePlacesError}</p>}
+              <div className="safe-place-list">
+                {visibleSafePlaces.map((place) => {
+                  const Icon = safePlaceIcon(place.category);
+                  const color = safePlaceColor(place.category);
+                  return (
+                    <div className="safe-place-item" key={place.id}>
+                      <span className="safe-place-icon" style={{ color, backgroundColor: `${color}1f` }}><Icon size={16} /></span>
+                      <div className="safe-place-copy">
+                        <strong>{place.name}</strong>
+                        <small>
+                          {safePlaceLabel(place.category)}
+                          {place.is24_7 ? ' · Open 24/7' : ''}
+                          {' · '}{formatDistance(distanceMeters(safePlacesSearchCenter, place.position))} away
+                        </small>
+                        {place.description && <p>{place.description}</p>}
+                        <div className="safe-place-actions">
+                          <button type="button" onClick={() => setFlyTo(place.position)}><MapPin size={12} /> Show on map</button>
+                          <a href={`https://www.google.com/maps/dir/?api=1&destination=${place.position[0]},${place.position[1]}`} target="_blank" rel="noreferrer"><Navigation size={12} /> Directions</a>
+                          {place.contactPhone && <a href={`tel:${place.contactPhone}`}><Phone size={12} /> Call</a>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {!visibleSafePlaces.length && !safePlacesError && (
+                  <p className="safe-places-status">No places in this category nearby.</p>
+                )}
+              </div>
+              {knownSafePlacesCenter && (
+                <a
+                  className="safe-places-fallback"
+                  href={`https://www.google.com/maps/search/church+cafe+hospital/@${knownSafePlacesCenter[0]},${knownSafePlacesCenter[1]},14z`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Search more places on Google Maps →
+                </a>
+              )}
+            </>
+          )}
+        </section>
+      )}
+
       {modeMessage && (
         <div className="map-mode-banner">
           <Crosshair size={17} />
           <span>{modeMessage}</span>
           <button type="button" onClick={() => setMapMode('idle')}>Cancel</button>
+        </div>
+      )}
+
+      {showUnsafeAlert && (
+        <div className="unsafe-area-alert" role="alert">
+          <span className="unsafe-alert-icon"><ShieldAlert size={20} /></span>
+          <div className="unsafe-alert-copy">
+            <strong>You may not be in a safe place</strong>
+            <span>
+              {unsafeNearbyReports.length} community report{unsafeNearbyReports.length === 1 ? '' : 's'} within{' '}
+              {formatDistance(UNSAFE_RADIUS_METERS)} · {unsafeCategorySummary}
+            </span>
+          </div>
+          <div className="unsafe-alert-actions">
+            <button type="button" onClick={() => setUnsafeDetailsOpen((open) => !open)}>
+              {unsafeDetailsOpen ? 'Hide details' : 'Details'}
+            </button>
+            <button type="button" onClick={() => setFlyTo(unsafeNearbyReports[0].position)}>
+              <Crosshair size={13} /> Show on map
+            </button>
+            <button
+              type="button"
+              className="unsafe-alert-close"
+              aria-label="Dismiss unsafe-area warning"
+              onClick={() => { setUnsafeAlertDismissed(true); setUnsafeDetailsOpen(false); }}
+            >
+              <X size={15} />
+            </button>
+          </div>
+          {unsafeDetailsOpen && (
+            <div className="unsafe-alert-details">
+              {unsafeNearbyReports.map((report) => (
+                <div key={report.id}>
+                  <i style={{ background: REPORT_COLORS[report.category] }} />
+                  <span>
+                    <strong>{report.category}</strong>
+                    <small>{report.description || 'No description was provided.'}</small>
+                  </span>
+                  <small>
+                    {userLocation ? formatDistance(distanceMeters(userLocation, report.position)) : 'Nearby'}
+                  </small>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -1259,9 +1706,12 @@ export default function App() {
           <div className="route-summary-top"><span className="route-summary-icon"><RouteIcon size={17} /></span><div><strong>Compare route options</strong><small>{routeChoices.filter((choice) => choice.route).length} alternative route(s) returned</small></div><button type="button" aria-label="Close routes" onClick={clearRoute}><X size={17} /></button></div>
           <div className="route-choice-list">
             {routeChoices.map((choice) => (
-              <button key={choice.kind} type="button" disabled={!choice.route} className={`route-choice ${selectedRouteKind === choice.kind && routePreview ? 'route-choice-active' : ''}`} onClick={() => selectRouteChoice(choice)}>
-                <span className="route-choice-copy"><strong>{choice.title}</strong><small>{choice.route ? choice.subtitle : choice.kind === 'shortest-higher-risk' ? 'No route with higher reported exposure was identified.' : 'The routing service did not return another distinct low-exposure path.'}</small></span>
-                {choice.route ? <span className="route-choice-metric"><strong>{formatDistance(choice.route.distanceMeters)}</strong><small>{formatDuration(choice.route.durationSeconds)}</small><small>{choice.route.nearbyReportCount} local reports</small></span> : <span className="route-unavailable">Unavailable</span>}
+              <button key={choice.kind} type="button" disabled={!choice.route} className={`route-choice ${selectedRouteKind === choice.kind && routePreview ? 'route-choice-active' : ''} ${choice.route && choice.route.nearbyReportCount > 0 ? 'route-choice-reported' : ''}`} onClick={() => selectRouteChoice(choice)}>
+                <span className="route-choice-copy">
+                  <strong>{choice.title} {choice.route && choice.route.nearbyReportCount > 0 && <span className="route-reported-tag"><AlertTriangle size={11} /> Reported zone</span>}</strong>
+                  <small>{choice.route ? choice.subtitle : choice.kind === 'shortest-higher-risk' ? 'No route with higher reported exposure was identified.' : 'The routing service did not return another distinct low-exposure path.'}</small>
+                </span>
+                {choice.route ? <span className="route-choice-metric"><strong>{formatDistance(choice.route.distanceMeters)}</strong><small>{formatDuration(choice.route.durationSeconds)}</small><small>{choice.route.nearbyReportCount} report{choice.route.nearbyReportCount === 1 ? '' : 's'} on path</small></span> : <span className="route-unavailable">Unavailable</span>}
               </button>
             ))}
           </div>
@@ -1298,12 +1748,22 @@ export default function App() {
                   <li key={step.id}><span className="direction-step-icon"><RouteIcon size={13} /></span><span className="direction-step-copy"><strong>{step.instruction}</strong><small>{formatDistance(step.distanceMeters)} · {formatDuration(step.durationSeconds)}</small></span></li>
                 )) : <li><span className="direction-step-copy"><strong>Turn-by-turn steps were not provided.</strong><small>Use the route preview as a map reference only.</small></span></li>}
               </ol>
+              {routePreview.nearbyReportCount > 0 && (
+                <div className="route-reported-warning">
+                  <AlertTriangle size={15} />
+                  <span>
+                    This route passes <strong>{routePreview.nearbyReportCount} reported unsafe zone{routePreview.nearbyReportCount === 1 ? '' : 's'}</strong> (within 250 m). Choose a route marked “avoids reports” when one is available.
+                  </span>
+                </div>
+              )}
               <div className="route-risk-note">
                 <AlertTriangle size={14} />
                 <span>
-                  {routePreview.isBackendRanked
-                    ? `Scored by SafeRoute engine against verified community reports, safe havens, and day/night lighting models.`
-                    : `${routePreview.nearbyReportCount} saved report(s) within roughly 220 m of this route.`}
+                  {routePreview.nearbyReportCount > 0
+                    ? 'Risk is raised to HIGH because reports are on this path, regardless of other safety factors.'
+                    : routePreview.isBackendRanked
+                      ? `Scored by SafeRoute engine against community reports, safe havens, and day/night lighting models.`
+                      : 'No community reports were detected within 250 m of this route.'}
                 </span>
               </div>
             </>
@@ -1478,6 +1938,9 @@ export default function App() {
                 <button className="secondary-button" type="button" disabled={locationBusy} onClick={() => getCurrentLocation((point) => setSosPoint(point))}><LocateFixed size={15} /> {locationBusy ? 'Getting GPS…' : 'Use my GPS'}</button>
                 <button className="secondary-button" type="button" onClick={chooseSosLocationOnMap}><MapPin size={15} /> Choose on map</button>
               </div>
+              <button className="safe-places-inline" type="button" onClick={() => void findSafePlaces()}>
+                <ShieldCheck size={15} /> Not an emergency? Find a safe place nearby
+              </button>
               <label className="field-label" htmlFor="sos-reason">What is happening? <span>Optional</span></label>
               <textarea id="sos-reason" rows={3} maxLength={500} value={sosReason} onChange={(event) => setSosReason(event.target.value)} placeholder="Add a short message if you can…" />
               <div className="optional-tools">
@@ -1505,15 +1968,15 @@ export default function App() {
               {lastSosShareUrl && (
                 <div className="share-link-banner">
                   <strong>Active Emergency Tracking Link:</strong>
-                  <a href={lastSosShareUrl} target="_blank" rel="noreferrer">
-                    {window.location.origin}{lastSosShareUrl}
+                  <a href={resolveAppUrl(lastSosShareUrl)} target="_blank" rel="noreferrer">
+                    {resolveAppUrl(lastSosShareUrl)}
                   </a>
                   <small>Share this link with trusted contacts to follow your journey live.</small>
                   {userPreferences?.emergencyContactPhone && (
                     <a
                       className="sos-sms-direct-btn"
                       href={`sms:${userPreferences.emergencyContactPhone}?body=${encodeURIComponent(
-                        `SafeRoute Emergency Alert: Follow my live journey here: ${window.location.origin}${lastSosShareUrl}`
+                        `SafeRoute Emergency Alert: Follow my live journey here: ${resolveAppUrl(lastSosShareUrl)}`
                       )}`}
                     >
                       <Phone size={13} />

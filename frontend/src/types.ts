@@ -27,7 +27,7 @@ export interface SafetyReport {
 export interface SafeLocation {
   id: string;
   name: string;
-  category: 'police_station' | 'hospital' | 'pharmacy' | 'verified_haven' | string;
+  category: 'police_station' | 'hospital' | 'pharmacy' | 'verified_haven' | 'church' | 'cafe' | string;
   description?: string;
   contactPhone?: string;
   position: LatLng;

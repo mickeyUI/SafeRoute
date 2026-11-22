@@ -15,6 +15,47 @@ const PHOTON_ENDPOINT = import.meta.env.VITE_GEOCODING_ENDPOINT || 'https://phot
 const OSRM_ENDPOINT = import.meta.env.VITE_ROUTING_ENDPOINT || 'https://router.project-osrm.org/route/v1/driving';
 const CLIENT_ID_KEY = 'saferoute-client-id';
 
+/** Path served by the public tracking page (see SharedJourneyPage.tsx). */
+export const TRACK_PATH_PREFIX = '/track/';
+
+export class ApiError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+/** Build the in-app path for a journey's public tracking page. */
+export function buildTrackPath(shareToken: string): string {
+  return `${TRACK_PATH_PREFIX}${encodeURIComponent(shareToken)}`;
+}
+
+/**
+ * Origin used in SMS/share links. In development this is localhost, so a public
+ * origin must be configured for links that will be opened on another device.
+ */
+export function getPublicAppOrigin(): string {
+  const configured = import.meta.env.VITE_PUBLIC_APP_ORIGIN;
+  return (configured || window.location.origin).replace(/\/$/, '');
+}
+
+/** Resolve an in-app path (or absolute URL) into a shareable URL. */
+export function resolveAppUrl(pathOrUrl: string): string {
+  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+  return `${getPublicAppOrigin()}${pathOrUrl.startsWith('/') ? pathOrUrl : `/${pathOrUrl}`}`;
+}
+
+export function buildTrackUrl(shareToken: string): string {
+  return resolveAppUrl(buildTrackPath(shareToken));
+}
+
+/** Extract a share token from the tracking page URL. */
+export function getTrackTokenFromPath(pathname: string): string | null {
+  if (!pathname.startsWith(TRACK_PATH_PREFIX)) return null;
+  const token = pathname.slice(TRACK_PATH_PREFIX.length).split('/')[0];
+  return token ? decodeURIComponent(token) : null;
+}
+
 /** Stable per-device id so a user's own SOS alerts are not shown as someone else's. */
 export function getClientId(): string {
   try {
@@ -76,7 +117,7 @@ async function apiRequest<T>(endpoint: string, options?: RequestInit): Promise<T
     if (!res.ok) {
       const errBody = await res.json().catch(() => ({}));
       const message = errBody?.error?.message || errBody?.detail || `API request failed with status ${res.status}`;
-      throw new Error(message);
+      throw new ApiError(message, res.status);
     }
     return (await res.json()) as T;
   } catch (error) {
@@ -154,6 +195,32 @@ export async function checkBackendHealth(): Promise<{ online: boolean; version?:
     }
     return { online: false };
   }
+}
+
+/** Minimal public view of a shared journey, as returned by the backend. */
+export interface SharedJourney {
+  journey_id: string;
+  status: string;
+  origin: { latitude: number; longitude: number };
+  destination: { latitude: number; longitude: number };
+  started_at: string;
+  estimated_arrival_at: string | null;
+  ended_at: string | null;
+  last_checkin: {
+    latitude: number;
+    longitude: number;
+    checkin_type?: string;
+    note?: string | null;
+    created_at?: string;
+  } | null;
+  route_coordinates: Array<[number, number] | { latitude: number; longitude: number }>;
+  share_expires_at: string;
+  remaining_minutes: number;
+}
+
+/** Fetch the public tracking view for a shared journey token. */
+export async function fetchSharedJourney(shareToken: string): Promise<SharedJourney> {
+  return apiRequest<SharedJourney>(`/shared/journeys/${encodeURIComponent(shareToken)}`);
 }
 
 export async function fetchBackendReports(center: LatLng, radiusMeters = 5000): Promise<SafetyReport[]> {
@@ -312,7 +379,7 @@ export async function triggerBackendSos(
         body: JSON.stringify({ valid_hours: 3 }),
       });
       shareToken = share.share_token;
-      shareUrl = `/api/v1/shared/journeys/${shareToken}`;
+      shareUrl = buildTrackPath(shareToken);
     }
   } catch {
     // Journey optional
@@ -607,6 +674,7 @@ export async function compareRoutesWithBackend(
   start: LatLng,
   end: LatLng,
   preference: 'safety' | 'balanced' | 'fastest' = 'safety',
+  reports: SafetyReport[] = [],
 ): Promise<RouteChoice[]> {
   const payload = {
     origin: { latitude: start[0], longitude: start[1] },
@@ -682,35 +750,52 @@ export async function compareRoutesWithBackend(
     }),
   );
 
-  const safest = candidates[0] || null;
-  const balanced = candidates.length > 1 ? candidates[1] : null;
-  const higherRisk = candidates.length > 2
-    ? candidates[candidates.length - 1]
-    : candidates.find((c) => (c.safetyIndicator?.overall_risk_score ?? 0) > (safest?.safetyIndicator?.overall_risk_score ?? 0)) ?? null;
+  // Re-check the final, snapped geometry against every report available in
+  // this browser. The engine may have missed reports (fetch window, status, or
+  // synthetic geometry), so its rank is not trusted for the safety label.
+  const exposed = applyUnsafeReportExposure(candidates, reports, 250);
+  const ranked = [...exposed].sort((a, b) =>
+    a.nearbyReportCount - b.nearbyReportCount ||
+    a.reportedRiskScore - b.reportedRiskScore ||
+    a.distanceMeters - b.distanceMeters,
+  );
+
+  const safest = ranked[0] || null;
+  const balanced = ranked.length > 1 ? ranked[1] : null;
+  const higherRisk = ranked.length > 2
+    ? ranked[ranked.length - 1]
+    : ranked.find((c) => (c.safetyIndicator?.overall_risk_score ?? 0) > (safest?.safetyIndicator?.overall_risk_score ?? 0)) ?? null;
+
+  const describe = (route: RouteCandidate | null, fallback: string) => {
+    if (!route) return fallback;
+    const risk = route.safetyIndicator;
+    const reportText = route.nearbyReportCount
+      ? ` · ${route.nearbyReportCount} reported zone${route.nearbyReportCount === 1 ? '' : 's'}`
+      : '';
+    return risk
+      ? `Risk: ${risk.risk_level.toUpperCase()} (${risk.overall_risk_score.toFixed(1)}/100)${reportText}`
+      : fallback;
+  };
 
   return [
     {
       kind: 'shortest-safest',
-      title: 'Safest route · Safety Engine',
-      subtitle: safest?.safetyIndicator
-        ? `Risk: ${safest.safetyIndicator.risk_level.toUpperCase()} (${safest.safetyIndicator.overall_risk_score.toFixed(1)}/100) · ${safest.safetyIndicator.safe_haven_count} safe havens`
-        : 'Shortest option among paths with lowest verified exposure',
+      title: safest && safest.nearbyReportCount > 0
+        ? 'Least exposed available route'
+        : 'Safest route · avoids reported zones',
+      subtitle: describe(safest, 'Shortest option with no reported zones'),
       route: safest,
     },
     {
       kind: 'longest-safest',
       title: 'Balanced alternative',
-      subtitle: balanced?.safetyIndicator
-        ? `Risk: ${balanced.safetyIndicator.risk_level.toUpperCase()} (${balanced.safetyIndicator.overall_risk_score.toFixed(1)}/100)`
-        : 'Distinct pedestrian corridor with low exposure',
+      subtitle: describe(balanced, 'Distinct pedestrian corridor with low exposure'),
       route: balanced,
     },
     {
       kind: 'shortest-higher-risk',
       title: 'Faster · Higher risk corridor',
-      subtitle: higherRisk?.safetyIndicator
-        ? `Risk: ${higherRisk.safetyIndicator.risk_level.toUpperCase()} (${higherRisk.safetyIndicator.overall_risk_score.toFixed(1)}/100) · ${higherRisk.safetyIndicator.incident_count} reports`
-        : 'Higher exposure corridor option',
+      subtitle: describe(higherRisk, 'Higher exposure corridor option'),
       route: higherRisk,
     },
   ];
@@ -883,14 +968,59 @@ function routeDistanceToPoint(route: RouteCandidate, point: LatLng): number {
   const coordinates = route.coordinates;
   if (!coordinates.length) return Number.POSITIVE_INFINITY;
   if (coordinates.length === 1) return pointToSegmentMeters(point, coordinates[0], coordinates[0]);
-  const stride = Math.max(1, Math.floor(coordinates.length / 220));
   let closest = Number.POSITIVE_INFINITY;
-  for (let i = 0; i < coordinates.length - 1; i += stride) {
-    const nextIndex = Math.min(i + stride, coordinates.length - 1);
-    closest = Math.min(closest, pointToSegmentMeters(point, coordinates[i], coordinates[nextIndex]));
-    if (closest < 25) break;
+  // Check every segment: sampled chords can miss a report beside a sharp bend.
+  for (let i = 0; i < coordinates.length - 1; i++) {
+    closest = Math.min(closest, pointToSegmentMeters(point, coordinates[i], coordinates[i + 1]));
+    if (closest < 1) break;
   }
   return closest;
+}
+
+/**
+ * Apply an absolute rule: any route passing within the unsafe radius of a
+ * community report is high risk, regardless of how the relative ranking scored
+ * it. This keeps "safest" from being assigned to a reported corridor.
+ */
+export function applyUnsafeReportExposure(
+  routes: RouteCandidate[],
+  reports: SafetyReport[],
+  radiusMeters = 250,
+): RouteCandidate[] {
+  return routes.map((route) => {
+    let count = 0;
+    let exposure = 0;
+    for (const report of reports) {
+      const distance = routeDistanceToPoint(route, report.position);
+      if (distance > radiusMeters) continue;
+      count += 1;
+      const proximity = 1 - distance / radiusMeters;
+      const severity = report.severity ?? 3;
+      exposure += CATEGORY_WEIGHT[report.category] * severity * 4 * Math.max(0.1, proximity);
+    }
+    if (!count) {
+      return { ...route, nearbyReportCount: 0 };
+    }
+    const riskScore = Math.min(100, Math.max(75, route.reportedRiskScore, 75 + exposure));
+    return {
+      ...route,
+      nearbyReportCount: count,
+      reportedRiskScore: Number(riskScore.toFixed(1)),
+      safetyIndicator: {
+        overall_risk_score: riskScore,
+        risk_level: 'high' as const,
+        data_coverage_score: route.safetyIndicator?.data_coverage_score ?? 70,
+        incident_count: count,
+        safe_haven_count: route.safetyIndicator?.safe_haven_count ?? 0,
+        observations: [
+          `Passes ${count} reported unsafe zone${count === 1 ? '' : 's'} within ${radiusMeters} m`,
+          ...(route.safetyIndicator?.observations ?? []).filter(
+            (obs) => !obs.toLowerCase().includes('clean community'),
+          ),
+        ].slice(0, 4),
+      },
+    };
+  });
 }
 
 const CATEGORY_WEIGHT: Record<SafetyReport['category'], number> = {
@@ -903,32 +1033,26 @@ const CATEGORY_WEIGHT: Record<SafetyReport['category'], number> = {
 };
 
 export function scoreRoutesWithLocalReports(routes: RouteCandidate[], reports: SafetyReport[]): RouteCandidate[] {
-  return routes.map((route) => {
-    let score = 0;
-    let count = 0;
-    for (const report of reports) {
-      const distance = routeDistanceToPoint(route, report.position);
-      if (distance > 220) continue;
-      count += 1;
-      const ageDays = Math.max(0, (Date.now() - new Date(report.createdAt).getTime()) / 86_400_000);
-      const recency = Number.isFinite(ageDays) ? Math.max(0.25, Math.exp(-ageDays / 120)) : 0.5;
-      const proximity = 1 - distance / 260;
-      score += CATEGORY_WEIGHT[report.category] * recency * Math.max(0, proximity);
-    }
-    return { ...route, nearbyReportCount: count, reportedRiskScore: Number(score.toFixed(2)) };
-  });
+  // Same absolute rule as the backend-backed path: a reported corridor is high
+  // risk and is not eligible for a "safest" label.
+  return applyUnsafeReportExposure(routes, reports, 250);
 }
 
 export function buildRouteChoices(routes: RouteCandidate[]): RouteChoice[] {
-  const riskRanked = [...routes].sort((a, b) => a.reportedRiskScore - b.reportedRiskScore || a.distanceMeters - b.distanceMeters);
-  const lowestRisk = riskRanked[0]?.reportedRiskScore ?? 0;
-  const saferPool = routes.filter((route) => route.reportedRiskScore <= lowestRisk + Math.max(0.75, lowestRisk * 0.3));
+  const riskRanked = [...routes].sort((a, b) =>
+    a.nearbyReportCount - b.nearbyReportCount ||
+    a.reportedRiskScore - b.reportedRiskScore ||
+    a.distanceMeters - b.distanceMeters,
+  );
+  // "Safest" requires actually avoiding reported zones. A relative tolerance
+  // used to allow a reported route to win when every route had some exposure.
+  const saferPool = riskRanked.filter((route) => route.nearbyReportCount === 0);
   const shortestSafe = [...saferPool].sort((a, b) => a.distanceMeters - b.distanceMeters)[0] ?? riskRanked[0] ?? null;
   const longestSafe = saferPool.length > 1
     ? [...saferPool].filter((route) => route.id !== shortestSafe?.id).sort((a, b) => b.distanceMeters - a.distanceMeters)[0]
     : null;
   const usedIds = new Set([shortestSafe?.id, longestSafe?.id].filter((id): id is string => Boolean(id)));
-  const higherExposurePool = routes.filter((route) => !usedIds.has(route.id) && route.reportedRiskScore > lowestRisk + 0.05);
+  const higherExposurePool = routes.filter((route) => !usedIds.has(route.id) && route.nearbyReportCount > 0);
   const highestExposure = higherExposurePool.length
     ? Math.max(...higherExposurePool.map((route) => route.reportedRiskScore))
     : null;
@@ -936,17 +1060,38 @@ export function buildRouteChoices(routes: RouteCandidate[]): RouteChoice[] {
     ? null
     : higherExposurePool.filter((route) => route.reportedRiskScore >= highestExposure - 0.05).sort((a, b) => a.distanceMeters - b.distanceMeters)[0] ?? null;
 
-  // Fallbacks if incident exposure is uniform or no reports exist in area
   const remaining = routes.filter((r) => !usedIds.has(r.id));
   const secondary = longestSafe ?? (remaining.length ? remaining[0] : null);
   if (secondary) usedIds.add(secondary.id);
   const remainingAfterSecondary = routes.filter((r) => !usedIds.has(r.id));
   const thirdRoute = shortestHigherRisk ?? (remainingAfterSecondary.length ? remainingAfterSecondary[0] : null);
 
+  const exposureLabel = (route: RouteCandidate | null) =>
+    route && route.nearbyReportCount > 0
+      ? `Passes ${route.nearbyReportCount} reported unsafe zone${route.nearbyReportCount === 1 ? '' : 's'}`
+      : 'No reported zones on this path';
+
   return [
-    { kind: 'shortest-safest', title: 'Shortest & safest', subtitle: 'Shortest option among paths with the lowest local report exposure', route: shortestSafe },
-    { kind: 'longest-safest', title: 'Balanced alternative', subtitle: 'Distinct pedestrian corridor with low exposure', route: secondary },
-    { kind: 'shortest-higher-risk', title: 'Faster · Higher risk corridor', subtitle: 'Alternative corridor option with direct passage', route: thirdRoute },
+    {
+      kind: 'shortest-safest',
+      title: shortestSafe && shortestSafe.nearbyReportCount > 0
+        ? 'Least exposed available route'
+        : 'Shortest & safest · avoids reports',
+      subtitle: exposureLabel(shortestSafe),
+      route: shortestSafe,
+    },
+    {
+      kind: 'longest-safest',
+      title: 'Balanced alternative',
+      subtitle: exposureLabel(secondary),
+      route: secondary,
+    },
+    {
+      kind: 'shortest-higher-risk',
+      title: 'Faster · Higher risk corridor',
+      subtitle: exposureLabel(thirdRoute),
+      route: thirdRoute,
+    },
   ];
 }
 

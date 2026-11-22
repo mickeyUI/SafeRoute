@@ -1,4 +1,4 @@
-.PHONY: help install dev db-up db-down db-init revision migrate test lint format openapi web-install web-dev web-build clean
+.PHONY: help install dev dev-api dev-web dev-full db-up db-down db-init revision migrate test lint format openapi web-install web-dev web-build clean
 
 PYTHON ?= python3
 VENV ?= .venv
@@ -17,8 +17,19 @@ install: ## Create a virtualenv and install backend dependencies
 	$(PIP) install --upgrade pip
 	$(PIP) install -e "./backend[dev]"
 
-dev: ## Run the API with reload
+dev: dev-api ## Run the API with reload
+
+dev-api: ## Run the FastAPI backend on port 8000
 	$(PY) -m uvicorn app.main:app --app-dir backend --reload --host 0.0.0.0 --port 8000
+
+dev-web: ## Run the Vite frontend on port 5173
+	cd frontend && npm run dev
+
+dev-full: ## Run backend and frontend together (Ctrl-C stops both)
+	@$(PY) -m uvicorn app.main:app --app-dir backend --reload --host 0.0.0.0 --port 8000 & \
+	API_PID=$$!; \
+	trap 'kill $$API_PID 2>/dev/null || true' EXIT INT TERM; \
+	cd frontend && npm run dev
 
 db-up: ## Start local Postgres 16 + PostGIS
 	docker compose up -d db

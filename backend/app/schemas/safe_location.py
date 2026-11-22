@@ -8,6 +8,8 @@ class SafeLocationCategory(str, Enum):
     HOSPITAL = "hospital"
     PHARMACY = "pharmacy"
     VERIFIED_HAVEN = "verified_haven"
+    CHURCH = "church"
+    CAFE = "cafe"
 
 
 class SafeLocationOut(BaseModel):

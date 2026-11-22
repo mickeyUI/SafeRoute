@@ -27,8 +27,14 @@ make install
 make db-up
 make db-init          # CREATE EXTENSION postgis
 make migrate          # apply Alembic revisions
-make dev              # API at http://localhost:8000
+make dev              # API only at http://localhost:8000
+make dev-full         # backend (:8000) + frontend (:5173), Ctrl-C stops both
 ```
+
+`make dev` still runs only the API; `make dev-web` runs only the frontend.
+The SOS "nearby users" feature requires the backend revision that provides
+`POST /api/v1/sos/alerts` and `GET /api/v1/sos/alerts/nearby` — older deployments
+only have `/api/v1/sos` and will silently fail to broadcast.
 
 Interactive API docs: <http://localhost:8000/docs>  
 Health check: <http://localhost:8000/health>  
